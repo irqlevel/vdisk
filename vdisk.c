@@ -137,8 +137,12 @@ static void vdisk_release(struct vdisk *disk)
 	del_gendisk(disk->gdisk);
 	blk_cleanup_queue(disk->queue);
 
+	TRACE("disk 0x%p stopping thread", disk);
+
 	kthread_stop(disk->thread);
 	put_task_struct(disk->thread);
+
+	TRACE("disk 0x%p thread stopped", disk);
 
 	put_disk(disk->gdisk);
 
@@ -327,7 +331,7 @@ int vdisk_create(int number, u64 size)
 	INIT_LIST_HEAD(&disk->req_list);
 
 	thread = kthread_create(vdisk_thread_routine, disk,
-				"vdisk-thread-%d", disk->number);
+				"vdisk%d-thread", disk->number);
 	if (IS_ERR(thread)) {
 		r = PTR_ERR(thread);
 		goto free_disk;
