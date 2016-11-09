@@ -22,7 +22,7 @@ static inline struct completion *vdisk_get_completion_from_kobject(
 struct vdisk {
 	int number;
 	struct request_queue *queue;
-	struct gendisk *disk;
+	struct gendisk *gdisk;
 	struct list_head list;
 	rwlock_t lock;
 	wait_queue_head_t waitq;
@@ -35,6 +35,7 @@ struct vdisk {
 	u64 limit_bps[2];
 	u64 limit_iops[2];
 	u64 entropy[2];
+	u64 size;
 	bool releasing;
 };
 
@@ -42,7 +43,7 @@ void vdisk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len);
 
 void vdisk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len);
 
-int vdisk_create(int number);
+int vdisk_create(int number, u64 size);
 
 int vdisk_delete(int number);
 

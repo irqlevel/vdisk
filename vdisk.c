@@ -18,12 +18,15 @@
 #include <linux/vmalloc.h>
 #include <linux/bitmap.h>
 #include <linux/rwsem.h>
+#include <linux/cdrom.h>
 
 #include "vdisk.h"
 #include "vdisk-sysfs.h"
 
 #define CREATE_TRACE_POINTS
 #include "vdisk-trace.h"
+
+#define VDISK_BLOCK_DEV_NAME "vdisk"
 
 static inline void vdisk_trace_printf(const char *fmt, ...)
 {
@@ -61,6 +64,7 @@ struct vdisk_global {
 	DECLARE_BITMAP(disk_numbers, VDISK_NUMBERS);
 	struct list_head disk_list;
 	struct rw_semaphore rw_sem;
+	int major;
 };
 
 static struct vdisk_global global_vdisk;
@@ -90,9 +94,18 @@ void vdisk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 
 static int vdisk_init_global(struct vdisk_global *glob)
 {
+	int r;
+
 	memset(glob, 0, sizeof(*glob));
 	INIT_LIST_HEAD(&glob->disk_list);
 	init_rwsem(&glob->rw_sem);
+
+	r = register_blkdev(0, VDISK_BLOCK_DEV_NAME);
+	if (r < 0)
+		return r;
+
+	glob->major = r;
+	pr_info("vdisk: major %d", glob->major);
 	return 0;
 }
 
@@ -103,6 +116,11 @@ static void vdisk_release(struct vdisk *disk)
 	TRACE("disk 0x%p number %d releasing", disk, disk->number);
 
 	vdisk_disk_sysfs_exit(disk);
+
+	del_gendisk(disk->gdisk);
+	blk_cleanup_queue(disk->queue);
+	put_disk(disk->gdisk);
+
 	clear_bit(disk->number, glob->disk_numbers);
 	kfree(disk);
 }
@@ -117,15 +135,74 @@ static void vdisk_deinit_global(struct vdisk_global *glob)
 		vdisk_release(curr);
 	}
 	up_write(&glob->rw_sem);
+
+	unregister_blkdev(glob->major, VDISK_BLOCK_DEV_NAME);
 }
 
-int vdisk_create(int number)
+static int vdisk_ioctl(struct block_device *bdev, fmode_t mode,
+		       unsigned int cmd, unsigned long arg)
+{
+	int r;
+	struct vdisk *disk = bdev->bd_disk->private_data;
+
+	TRACE("disk 0x%p cmd 0x%lx arg 0x%lx", disk, cmd, arg);
+
+	r = -EINVAL;
+	switch (cmd) {
+	case BLKFLSBUF:
+		r = 0;
+		break;
+	case CDROM_GET_CAPABILITY:
+		r = -ENOIOCTLCMD;
+		break;
+	default:
+		break;
+	}
+
+	TRACE("disk 0x%p cmd 0x%lx arg 0x%lx r %d", disk, cmd, arg, r);
+
+	return r;
+}
+
+static const struct block_device_operations vdisk_fops = {
+	.owner = THIS_MODULE,
+	.ioctl = vdisk_ioctl,
+};
+
+static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
+{
+	struct block_device *bdev = bio->bi_bdev;
+	struct vdisk *disk = bdev->bd_disk->private_data;
+	sector_t sector;
+
+	sector = bio->bi_iter.bi_sector;
+	TRACE("disk 0x%p bdev 0x%p bio 0x%p rw 0x%x sector %lu size %u",
+	      disk, bdev, bio, bio->bi_rw, sector, bio->bi_iter.bi_size);
+
+	if (bio_end_sector(bio) > get_capacity(bdev->bd_disk))
+		goto io_error;
+
+	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
+		if (sector & ((PAGE_SIZE >> SECTOR_SHIFT) - 1) ||
+		    bio->bi_iter.bi_size & ~PAGE_MASK)
+			goto io_error;
+	}
+
+io_error:
+	bio_io_error(bio);
+	return BLK_QC_T_NONE;
+}
+
+int vdisk_create(int number, u64 size)
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
+	struct gendisk *gdisk;
 	int r;
 
 	if (number < 0 || number >= VDISK_NUMBERS)
+		return -EINVAL;
+	if (size & 511 || size & 4095)
 		return -EINVAL;
 
 	TRACE("creating disk %d", number);
@@ -142,17 +219,57 @@ int vdisk_create(int number)
 	}
 
 	disk->number = number;
-	r = vdisk_disk_sysfs_init(disk);
-	if (r)
+	disk->size = size;
+	init_waitqueue_head(&disk->waitq);
+	rwlock_init(&disk->lock);
+	INIT_LIST_HEAD(&disk->req_list);
+	disk->queue = blk_alloc_queue(GFP_KERNEL);
+	if (!disk->queue)
 		goto free_disk;
 
+
+	blk_queue_make_request(disk->queue, vdisk_make_request);
+	blk_queue_max_hw_sectors(disk->queue, 1024);
+	blk_queue_bounce_limit(disk->queue, BLK_BOUNCE_ANY);
+
+	disk->queue->limits.discard_granularity = PAGE_SIZE;
+	disk->queue->limits.max_discard_sectors = UINT_MAX;
+	disk->queue->limits.discard_zeroes_data = 1;
+	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, disk->queue);
+
+	gdisk = alloc_disk(1);
+	if (!gdisk)
+		goto free_queue;
+
+	gdisk->major = glob->major;
+	gdisk->first_minor = disk->number;
+	gdisk->fops = &vdisk_fops;
+	gdisk->private_data = disk;
+	gdisk->queue = disk->queue;
+	gdisk->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
+	snprintf(gdisk->disk_name, sizeof(gdisk->disk_name),
+		 VDISK_BLOCK_DEV_NAME"%d", disk->number);
+	set_capacity(gdisk, size / 512);
+	disk->gdisk = gdisk;
+
+	r = vdisk_disk_sysfs_init(disk);
+	if (r)
+		goto free_gdisk;
+
 	down_write(&glob->rw_sem);
-	TRACE("disk 0x%p number %d added", disk, disk->number);
+	TRACE("disk 0x%p gdisk 0x%p number %d added",
+	      disk, gdisk, disk->number);
 	list_add_tail(&disk->list, &glob->disk_list);
 	up_write(&glob->rw_sem);
 
+	add_disk(gdisk);
+
 	return 0;
 
+free_gdisk:
+	put_disk(gdisk);
+free_queue:
+	blk_cleanup_queue(disk->queue);
 free_disk:
 	kfree(disk);
 free_number:

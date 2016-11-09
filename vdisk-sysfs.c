@@ -212,14 +212,15 @@ void vdisk_disk_sysfs_exit(struct vdisk *ctx)
 
 static ssize_t vdisk_root_attr_create_store(const char *buf, size_t count)
 {
+	u64 size;
 	int number;
 	int r;
 
-	r = sscanf(buf, "%d", &number);
-	if (r < 1)
+	r = sscanf(buf, "%d %llu", &number, &size);
+	if (r < 2)
 		return -EINVAL;
 
-	r = vdisk_create(number);
+	r = vdisk_create(number, size);
 	if (r)
 		return r;
 
