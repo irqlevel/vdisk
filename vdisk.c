@@ -19,6 +19,7 @@
 #include <linux/bitmap.h>
 #include <linux/rwsem.h>
 #include <linux/cdrom.h>
+#include <linux/kthread.h>
 
 #include "vdisk.h"
 #include "vdisk-sysfs.h"
@@ -65,6 +66,8 @@ struct vdisk_global {
 	struct list_head disk_list;
 	struct rw_semaphore rw_sem;
 	int major;
+	u32 server_ip;
+	u16 server_port;
 };
 
 static struct vdisk_global global_vdisk;
@@ -90,6 +93,20 @@ void vdisk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 
 	disk->limit_bps[0] = limit_bps[0];
 	disk->limit_bps[1] = limit_bps[1];
+}
+
+int vdisk_set_server(u32 ip, u16 port)
+{
+	struct vdisk_global *glob = vdisk_get_global();
+
+	TRACE("set server ip 0x%x port %u", ip, port);
+
+	down_write(&glob->rw_sem);
+	glob->server_ip = ip;
+	glob->server_port = port;
+	up_write(&glob->rw_sem);
+
+	return 0;
 }
 
 static int vdisk_init_global(struct vdisk_global *glob)
@@ -119,10 +136,16 @@ static void vdisk_release(struct vdisk *disk)
 
 	del_gendisk(disk->gdisk);
 	blk_cleanup_queue(disk->queue);
+
+	kthread_stop(disk->thread);
+	put_task_struct(disk->thread);
+
 	put_disk(disk->gdisk);
 
 	clear_bit(disk->number, glob->disk_numbers);
 	kfree(disk);
+
+	TRACE("disk 0x%p released", disk);
 }
 
 static void vdisk_deinit_global(struct vdisk_global *glob)
@@ -169,15 +192,77 @@ static const struct block_device_operations vdisk_fops = {
 	.ioctl = vdisk_ioctl,
 };
 
+static int vdisk_thread_routine(void *data)
+{
+	struct vdisk *disk = data;
+	struct vdisk_bio *vbio, *tmp;
+	struct list_head req_list;
+	struct bio *bio;
+	unsigned long irq_flags;
+
+	TRACE("disk 0x%p thread starting", disk);
+
+	for (;;) {
+		wait_event_interruptible(disk->waitq,
+			(kthread_should_stop() ||
+			 !list_empty(&disk->req_list)));
+		if (kthread_should_stop()) {
+			TRACE("disk 0x%p thread should stop", disk);
+			break;
+		}
+
+		write_lock_irqsave(&disk->lock, irq_flags);
+		vbio = list_first_entry_or_null(&disk->req_list,
+						struct vdisk_bio, list);
+		if (vbio)
+			list_del_init(&vbio->list);
+		write_unlock_irqrestore(&disk->lock, irq_flags);
+		if (!vbio)
+			continue;
+
+		bio = vbio->bio;
+		TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
+			disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
+			bio->bi_iter.bi_size);
+		bio_io_error(bio);
+		bio_put(bio);
+		kfree(vbio);
+	}
+
+	TRACE("disk 0x%p thread stopping", disk);
+
+	/* cancel all requests */
+	INIT_LIST_HEAD(&req_list);
+	write_lock_irqsave(&disk->lock, irq_flags);
+	list_splice_init(&disk->req_list, &req_list);
+	write_unlock_irqrestore(&disk->lock, irq_flags);
+
+	list_for_each_entry_safe(vbio, tmp, &req_list, list) {
+		list_del_init(&vbio->list);
+		bio = vbio->bio;
+		TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
+			disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
+			bio->bi_iter.bi_size);
+		bio_io_error(bio);
+		bio_put(bio);
+		kfree(vbio);
+	}
+
+	TRACE("disk 0x%p thread stopped", disk);
+	return 0;
+}
+
 static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
 	struct vdisk *disk = bdev->bd_disk->private_data;
+	struct vdisk_bio *vbio;
 	sector_t sector;
+	unsigned long irq_flags;
 
 	sector = bio->bi_iter.bi_sector;
-	TRACE("disk 0x%p bdev 0x%p bio 0x%p rw 0x%x sector %lu size %u",
-	      disk, bdev, bio, bio->bi_rw, sector, bio->bi_iter.bi_size);
+	TRACE("disk 0x%p bio 0x%p rw 0x%x sector %lu size %u",
+	      disk, bio, bio->bi_rw, sector, bio->bi_iter.bi_size);
 
 	if (bio_end_sector(bio) > get_capacity(bdev->bd_disk))
 		goto io_error;
@@ -188,7 +273,23 @@ static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
 			goto io_error;
 	}
 
+	vbio = kmalloc(sizeof(*vbio), GFP_NOIO);
+	if (!vbio)
+		goto io_error;
+	bio_get(bio);
+	vbio->bio = bio;
+
+	write_lock_irqsave(&disk->lock, irq_flags);
+	list_add_tail(&vbio->list, &disk->req_list);
+	write_unlock_irqrestore(&disk->lock, irq_flags);
+
+	wake_up_interruptible(&disk->waitq);
+	return BLK_QC_T_NONE;
+
 io_error:
+	TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
+	      disk, bio, bio->bi_rw, sector, bio->bi_iter.bi_size);
+
 	bio_io_error(bio);
 	return BLK_QC_T_NONE;
 }
@@ -198,6 +299,7 @@ int vdisk_create(int number, u64 size)
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
 	struct gendisk *gdisk;
+	struct task_struct *thread;
 	int r;
 
 	if (number < 0 || number >= VDISK_NUMBERS)
@@ -223,10 +325,23 @@ int vdisk_create(int number, u64 size)
 	init_waitqueue_head(&disk->waitq);
 	rwlock_init(&disk->lock);
 	INIT_LIST_HEAD(&disk->req_list);
-	disk->queue = blk_alloc_queue(GFP_KERNEL);
-	if (!disk->queue)
-		goto free_disk;
 
+	thread = kthread_create(vdisk_thread_routine, disk,
+				"vdisk-thread-%d", disk->number);
+	if (IS_ERR(thread)) {
+		r = PTR_ERR(thread);
+		goto free_disk;
+	}
+
+	get_task_struct(thread);
+	disk->thread = thread;
+	wake_up_process(disk->thread);
+
+	disk->queue = blk_alloc_queue(GFP_KERNEL);
+	if (!disk->queue) {
+		r = -ENOMEM;
+		goto free_thread;
+	}
 
 	blk_queue_make_request(disk->queue, vdisk_make_request);
 	blk_queue_max_hw_sectors(disk->queue, 1024);
@@ -238,8 +353,10 @@ int vdisk_create(int number, u64 size)
 	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, disk->queue);
 
 	gdisk = alloc_disk(1);
-	if (!gdisk)
+	if (!gdisk) {
+		r = -ENOMEM;
 		goto free_queue;
+	}
 
 	gdisk->major = glob->major;
 	gdisk->first_minor = disk->number;
@@ -270,6 +387,9 @@ free_gdisk:
 	put_disk(gdisk);
 free_queue:
 	blk_cleanup_queue(disk->queue);
+free_thread:
+	kthread_stop(disk->thread);
+	put_task_struct(disk->thread);
 free_disk:
 	kfree(disk);
 free_number:

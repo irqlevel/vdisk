@@ -255,6 +255,41 @@ static ssize_t vdisk_root_attr_delete_show(char *buf)
 	return strlen(buf);
 }
 
+static ssize_t vdisk_root_attr_server_store(const char *buf, size_t count)
+{
+	unsigned int ip_part[4], port, ip;
+	int r;
+	int i;
+
+	r = sscanf(buf, "%u.%u.%u.%u:%u",
+		   &ip_part[3], &ip_part[2], &ip_part[1], &ip_part[0], &port);
+	if (r < 5)
+		return -EINVAL;
+
+	if (port > 65535)
+		return -EINVAL;
+
+	ip = 0;
+	for (i = 0; i < ARRAY_SIZE(ip_part); i++) {
+		if (ip_part[i] > 255)
+			return -EINVAL;
+
+		ip += (ip_part[i] << (i * 8));
+	}
+
+	r = vdisk_set_server((u32)ip, (u16)port);
+	if (r)
+		return r;
+
+	return count;
+}
+
+static ssize_t vdisk_root_attr_server_show(char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "\n");
+	return strlen(buf);
+}
+
 struct vdisk_root_sysfs_attr {
 	struct attribute attr;
 	ssize_t (*show)(char *);
@@ -272,10 +307,12 @@ struct vdisk_root_sysfs_attr vdisk_root_attr_##_name = \
 
 static VDISK_ROOT_ATTR_RW(create);
 static VDISK_ROOT_ATTR_RW(delete);
+static VDISK_ROOT_ATTR_RW(server);
 
 static struct attribute *vdisk_root_attrs[] = {
 	&vdisk_root_attr_create.attr,
 	&vdisk_root_attr_delete.attr,
+	&vdisk_root_attr_server.attr,
 	NULL,
 };
 
