@@ -9,7 +9,7 @@ obj-m = $(VDISK_MOD).o
 
 KBUILD_EXTRA_SYMBOLS = $(KERNEL_BUILD_PATH)/Module.symvers
 
-ccflags-y := -I$(src)
+ccflags-y := -I$(src) -g3
 
 all:
 	$(MAKE) -C $(KERNEL_BUILD_PATH) M=$(CURRDIR) modules

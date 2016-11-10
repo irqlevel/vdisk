@@ -2,13 +2,16 @@
 #define __VDISK_SYSFS_H__
 
 #include <linux/sysfs.h>
+#include <linux/kobject.h>
 #include "vdisk.h"
 
-int vdisk_disk_sysfs_init(struct vdisk *vdisk);
+extern struct kobj_type vdisk_disk_ktype;
+extern struct kobj_type vdisk_session_ktype;
+extern struct kobj_type vdisk_global_ktype;
 
-void vdisk_disk_sysfs_exit(struct vdisk *vdisk);
+int vdisk_sysfs_init(struct vdisk_kobject_holder *holder, struct kobject *root,
+		     struct kobj_type *ktype, const char *fmt, ...);
 
-int vdisk_sysfs_init(void);
-void vdisk_sysfs_exit(void);
+void vdisk_sysfs_deinit(struct vdisk_kobject_holder *holder);
 
 #endif

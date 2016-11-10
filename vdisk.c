@@ -23,11 +23,11 @@
 
 #include "vdisk.h"
 #include "vdisk-sysfs.h"
+#include "vdisk-connection.h"
+
 
 #define CREATE_TRACE_POINTS
 #include "vdisk-trace.h"
-
-#define VDISK_BLOCK_DEV_NAME "vdisk"
 
 static inline void vdisk_trace_printf(const char *fmt, ...)
 {
@@ -59,25 +59,14 @@ do {							\
 			      __func__, ##__VA_ARGS__);	\
 } while (false)
 
-#define VDISK_NUMBERS 256
-
-struct vdisk_global {
-	DECLARE_BITMAP(disk_numbers, VDISK_NUMBERS);
-	struct list_head disk_list;
-	struct rw_semaphore rw_sem;
-	int major;
-	u32 server_ip;
-	u16 server_port;
-};
-
-static struct vdisk_global global_vdisk;
+static struct vdisk_global global_context;
 
 static struct vdisk_global *vdisk_get_global(void)
 {
-	return &global_vdisk;
+	return &global_context;
 }
 
-void vdisk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len)
+void vdisk_disk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len)
 {
 	if (WARN_ON(len != 2))
 		return;
@@ -86,7 +75,7 @@ void vdisk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len)
 	disk->limit_iops[1] = limit_iops[1];
 }
 
-void vdisk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
+void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 {
 	if (WARN_ON(len != 2))
 		return;
@@ -95,16 +84,14 @@ void vdisk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 	disk->limit_bps[1] = limit_bps[1];
 }
 
-int vdisk_set_server(u32 ip, u16 port)
+int vdisk_session_set_server(struct vdisk_session *session, u32 ip, u16 port)
 {
-	struct vdisk_global *glob = vdisk_get_global();
+	TRACE("session 0x%p set server ip 0x%x port %u", session, ip, port);
 
-	TRACE("set server ip 0x%x port %u", ip, port);
-
-	down_write(&glob->rw_sem);
-	glob->server_ip = ip;
-	glob->server_port = port;
-	up_write(&glob->rw_sem);
+	down_write(&session->rw_sem);
+	session->ip = ip;
+	session->port = port;
+	up_write(&session->rw_sem);
 
 	return 0;
 }
@@ -112,18 +99,30 @@ int vdisk_set_server(u32 ip, u16 port)
 static int vdisk_init_global(struct vdisk_global *glob)
 {
 	int r;
+	int major;
 
 	memset(glob, 0, sizeof(*glob));
-	INIT_LIST_HEAD(&glob->disk_list);
+	INIT_LIST_HEAD(&glob->session_list);
 	init_rwsem(&glob->rw_sem);
 
 	r = register_blkdev(0, VDISK_BLOCK_DEV_NAME);
 	if (r < 0)
 		return r;
 
-	glob->major = r;
+	major = r;
+
+	r = vdisk_sysfs_init(&glob->kobj_holder, fs_kobj, &vdisk_global_ktype,
+			"%s", "vdisk");
+	if (r)
+		goto free_blk;
+
+	glob->major = major;
 	pr_info("vdisk: major %d", glob->major);
 	return 0;
+
+free_blk:
+	unregister_blkdev(major, VDISK_BLOCK_DEV_NAME);
+	return r;
 }
 
 static void vdisk_release(struct vdisk *disk)
@@ -131,8 +130,6 @@ static void vdisk_release(struct vdisk *disk)
 	struct vdisk_global *glob = vdisk_get_global();
 
 	TRACE("disk 0x%p number %d releasing", disk, disk->number);
-
-	vdisk_disk_sysfs_exit(disk);
 
 	del_gendisk(disk->gdisk);
 	blk_cleanup_queue(disk->queue);
@@ -146,22 +143,51 @@ static void vdisk_release(struct vdisk *disk)
 
 	put_disk(disk->gdisk);
 
+	vdisk_sysfs_deinit(&disk->kobj_holder);
+
 	clear_bit(disk->number, glob->disk_numbers);
 	kfree(disk);
 
 	TRACE("disk 0x%p released", disk);
 }
 
-static void vdisk_deinit_global(struct vdisk_global *glob)
+static void vdisk_session_release(struct vdisk_session *session)
 {
+	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *curr, *tmp;
 
-	down_write(&glob->rw_sem);
-	list_for_each_entry_safe(curr, tmp, &glob->disk_list, list) {
+	TRACE("session 0x%p number %d releasing", session, session->number);
+
+	vdisk_con_deinit(&session->con);
+
+	down_write(&session->rw_sem);
+	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
 		list_del_init(&curr->list);
 		vdisk_release(curr);
 	}
+	up_write(&session->rw_sem);
+
+	vdisk_sysfs_deinit(&session->kobj_holder);
+
+	clear_bit(session->number, glob->session_numbers);
+
+	kfree(session);
+
+	TRACE("sesson 0x%p released", session);
+}
+
+static void vdisk_deinit_global(struct vdisk_global *glob)
+{
+	struct vdisk_session *curr, *tmp;
+
+	down_write(&glob->rw_sem);
+	list_for_each_entry_safe(curr, tmp, &glob->session_list, list) {
+		list_del_init(&curr->list);
+		vdisk_session_release(curr);
+	}
 	up_write(&glob->rw_sem);
+
+	vdisk_sysfs_deinit(&glob->kobj_holder);
 
 	unregister_blkdev(glob->major, VDISK_BLOCK_DEV_NAME);
 }
@@ -298,7 +324,8 @@ io_error:
 	return BLK_QC_T_NONE;
 }
 
-int vdisk_create(int number, u64 size)
+int vdisk_session_create_disk(struct vdisk_session *session,
+			      int number, u64 size)
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
@@ -306,17 +333,15 @@ int vdisk_create(int number, u64 size)
 	struct task_struct *thread;
 	int r;
 
-	if (number < 0 || number >= VDISK_NUMBERS)
+	if (number < 0 || number >= VDISK_DISK_NUMBER_MAX)
 		return -EINVAL;
 	if (size & 511 || size & 4095)
 		return -EINVAL;
 
 	TRACE("creating disk %d", number);
 
-	if (test_and_set_bit(number, glob->disk_numbers) != 0) {
-		r = -EINVAL;
-		goto fail;
-	}
+	if (test_and_set_bit(number, glob->disk_numbers) != 0)
+		return -EINVAL;
 
 	disk = kzalloc(sizeof(*disk), GFP_KERNEL);
 	if (!disk) {
@@ -373,15 +398,16 @@ int vdisk_create(int number, u64 size)
 	set_capacity(gdisk, size / 512);
 	disk->gdisk = gdisk;
 
-	r = vdisk_disk_sysfs_init(disk);
+	r = vdisk_sysfs_init(&disk->kobj_holder, &session->kobj_holder.kobj,
+			&vdisk_disk_ktype, "vdisk%d", disk->number);
 	if (r)
 		goto free_gdisk;
 
-	down_write(&glob->rw_sem);
-	TRACE("disk 0x%p gdisk 0x%p number %d added",
-	      disk, gdisk, disk->number);
-	list_add_tail(&disk->list, &glob->disk_list);
-	up_write(&glob->rw_sem);
+	down_write(&session->rw_sem);
+	TRACE("session 0x%p disk 0x%p gdisk 0x%p number %d added",
+	      session, disk, gdisk, disk->number);
+	list_add_tail(&disk->list, &session->disk_list);
+	up_write(&session->rw_sem);
 
 	add_disk(gdisk);
 
@@ -398,24 +424,96 @@ free_disk:
 	kfree(disk);
 free_number:
 	clear_bit(number, glob->disk_numbers);
-fail:
 	return r;
 }
 
-int vdisk_delete(int number)
+int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 {
-	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *curr, *tmp;
 	int r;
 
 	TRACE("deleting disk %d", number);
 
 	r = -ENOTTY;
-	down_write(&glob->rw_sem);
-	list_for_each_entry_safe(curr, tmp, &glob->disk_list, list) {
+	down_write(&session->rw_sem);
+	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
 		if (curr->number == number) {
 			list_del_init(&curr->list);
 			vdisk_release(curr);
+			r = 0;
+			break;
+		}
+	}
+	up_write(&session->rw_sem);
+
+	return r;
+}
+
+int vdisk_global_create_session(struct vdisk_global *glob, int number)
+{
+	struct vdisk_session *session;
+	int r;
+
+	if (WARN_ON(glob != vdisk_get_global()))
+		return -EINVAL;
+	if (number < 0 || number >= VDISK_SESSION_NUMBER_MAX)
+		return -EINVAL;
+
+	TRACE("creating session %d", number);
+
+	if (test_and_set_bit(number, glob->session_numbers) != 0)
+		return -EINVAL;
+
+	session = kzalloc(sizeof(*session), GFP_KERNEL);
+	if (!session) {
+		r = -ENOMEM;
+		goto free_number;
+	}
+	init_rwsem(&session->rw_sem);
+	INIT_LIST_HEAD(&session->disk_list);
+	session->number = number;
+
+	r = vdisk_con_init(&session->con);
+	if (r)
+		goto free_session;
+
+	r = vdisk_sysfs_init(&session->kobj_holder, &glob->kobj_holder.kobj,
+		&vdisk_session_ktype, "session%d", session->number);
+	if (r)
+		goto free_con;
+
+	down_write(&glob->rw_sem);
+	TRACE("session 0x%p number %d added", session, session->number);
+	list_add_tail(&session->list, &glob->session_list);
+	up_write(&glob->rw_sem);
+
+	return 0;
+
+free_con:
+	vdisk_con_deinit(&session->con);
+free_session:
+	kfree(session);
+free_number:
+	clear_bit(number, glob->session_numbers);
+	return r;
+}
+
+int vdisk_global_delete_session(struct vdisk_global *glob, int number)
+{
+	struct vdisk_session *curr, *tmp;
+	int r;
+
+	if (WARN_ON(glob != vdisk_get_global()))
+		return -EINVAL;
+
+	TRACE("deleting session %d", number);
+
+	r = -ENOTTY;
+	down_write(&glob->rw_sem);
+	list_for_each_entry_safe(curr, tmp, &glob->session_list, list) {
+		if (curr->number == number) {
+			list_del_init(&curr->list);
+			vdisk_session_release(curr);
 			r = 0;
 			break;
 		}
@@ -436,33 +534,14 @@ static int __init vdisk_init(void)
 		return r;
 	}
 
-	r = vdisk_sysfs_init();
-	if (r) {
-		pr_err("vdisk: cant create root kobject, r %d", r);
-		goto deinit_global;
-	}
-
 	pr_info("vdisk: inited, vdisk_init=0x%p global=0x%p", vdisk_init, glob);
 	return 0;
-
-deinit_global:
-	vdisk_deinit_global(glob);
-	return r;
 }
 
 static void __exit vdisk_exit(void)
 {
 	struct vdisk_global *glob = vdisk_get_global();
-	struct vdisk *curr, *tmp;
 
-	down_write(&glob->rw_sem);
-	list_for_each_entry_safe(curr, tmp, &glob->disk_list, list) {
-		list_del_init(&curr->list);
-		vdisk_release(curr);
-	}
-	up_write(&glob->rw_sem);
-
-	vdisk_sysfs_exit();
 	vdisk_deinit_global(glob);
 
 	pr_info("vdisk: exited");
