@@ -15,17 +15,19 @@
 #define VDISK_REQ_MAGIC		0xCBDACBDA
 #define VDISK_RESP_MAGIC	0xCBDACBDA
 
-#define VDISK_REQ_LOGIN		1
-#define VDISK_REQ_LOGOUT	2
-#define VDISK_REQ_DISK_CREATE	3
-#define VDISK_REQ_DISK_DELETE	4
-#define VDISK_REQ_DISK_OPEN	5
-#define VDISK_REQ_DISK_CLOSE	6
-#define VDISK_REQ_DISK_IO	7
+#define VDISK_REQ_TYPE_LOGIN		1
+#define VDISK_REQ_TYPE_LOGOUT		2
+#define VDISK_REQ_TYPE_DISK_CREATE	3
+#define VDISK_REQ_TYPE_DISK_DELETE	4
+#define VDISK_REQ_TYPE_DISK_OPEN	5
+#define VDISK_REQ_TYPE_DISK_CLOSE	6
+#define VDISK_REQ_TYPE_DISK_READ	7
+#define VDISK_REQ_TYPE_DISK_WRITE	8
 
 #define VDISK_BODY_MAX		65536
 
 #define VDISK_ID_SIZE		256
+#define VDISK_ID_SCANF_FMT	"%255s"
 
 struct vdisk_kobject_holder {
 	struct kobject kobj;
@@ -60,12 +62,12 @@ struct vdisk_req_login {
 };
 
 struct vdisk_resp {
-	int r;
+	__le32 r;
 };
 
 struct vdisk_resp_login {
 	char session_id[VDISK_ID_SIZE];
-	int r;
+	__le32 r;
 };
 
 struct vdisk_req_logout {
@@ -88,7 +90,7 @@ struct vdisk_req_disk_open {
 
 struct vdisk_resp_disk_open {
 	char disk_handle[VDISK_ID_SIZE];
-	int r;
+	__le32 r;
 };
 
 struct vdisk_req_disk_close {
@@ -96,13 +98,14 @@ struct vdisk_req_disk_close {
 	char disk_handle[VDISK_ID_SIZE];
 };
 
-struct vdisk_req_disk_io {
+struct vdisk_req_disk_read {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
 };
 
-struct vdisk_resp_disk_io {
-	int r;
+struct vdisk_req_disk_write {
+	char session_id[VDISK_ID_SIZE];
+	char disk_handle[VDISK_ID_SIZE];
 };
 
 struct vdisk_bio {
@@ -150,8 +153,6 @@ struct vdisk_session {
 	struct rw_semaphore rw_sem;
 	struct vdisk_connection con;
 	struct vdisk_kobject_holder kobj_holder;
-	u32 ip;
-	u16 port;
 };
 
 struct vdisk_global {
@@ -172,7 +173,14 @@ int vdisk_session_create_disk(struct vdisk_session *session,
 
 int vdisk_session_delete_disk(struct vdisk_session *session, int number);
 
-int vdisk_session_set_server(struct vdisk_session *session, u32 ip, u16 port);
+int vdisk_session_connect(struct vdisk_session *session, u32 ip, u16 port);
+
+int vdisk_session_disconnect(struct vdisk_session *session);
+
+int vdisk_session_login(struct vdisk_session *session,
+			char *user_name, char *password);
+
+int vdisk_session_logout(struct vdisk_session *session);
 
 int vdisk_global_create_session(struct vdisk_global *glob, int number);
 

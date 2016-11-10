@@ -119,7 +119,7 @@ static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
 		goto free_body;
 	}
 
-	*body = body;
+	*body = lbody;
 
 	return 0;
 free_body:
@@ -127,36 +127,36 @@ free_body:
 	return r;
 }
 
-int vdisk_login(struct vdisk_connection *con, u32 ip, u16 port,
-		char *user_name, char *password)
+int vdisk_con_login(struct vdisk_connection *con,
+		    char *user_name, char *password)
 {
-	int r;
 	struct vdisk_req_header *req;
-	struct vdisk_req_login *req_body;
+	struct vdisk_req_login *login;
 	struct vdisk_resp_login *resp;
+	int r;
 
 	r = -ENOTTY;
 	down_write(&con->rw_sem);
 	if (!con->sock)
 		goto unlock;
 
-	req = vdisk_req_create(VDISK_REQ_LOGIN, sizeof(*req_body));
+	req = vdisk_req_create(VDISK_REQ_TYPE_LOGIN, sizeof(*login));
 	if (!req) {
 		r = -ENOMEM;
 		goto unlock;
 	}
 
-	req_body = (struct vdisk_req_login *)(req + 1);
-	snprintf(req_body->user_name, ARRAY_SIZE(req_body->user_name),
+	login = (struct vdisk_req_login *)(req + 1);
+	snprintf(login->user_name, ARRAY_SIZE(login->user_name),
 		 "%s", user_name);
-	snprintf(req_body->password, ARRAY_SIZE(req_body->password),
+	snprintf(login->password, ARRAY_SIZE(login->password),
 		 "%s", password);
 
 	r = vdisk_send_req(con->sock, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_LOGIN,
+	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGIN,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -178,7 +178,47 @@ unlock:
 	return r;
 }
 
-int vdisk_logout(struct vdisk_connection *con)
+int vdisk_con_logout(struct vdisk_connection *con)
 {
-	return -EINVAL;
+	struct vdisk_req_header *req;
+	struct vdisk_req_logout *logout;
+	struct vdisk_resp *resp;
+	int r;
+
+	r = -ENOTTY;
+	down_write(&con->rw_sem);
+	if (!con->sock)
+		goto unlock;
+
+	req = vdisk_req_create(VDISK_REQ_TYPE_LOGOUT, sizeof(*logout));
+	if (!req) {
+		r = -ENOMEM;
+		goto unlock;
+	}
+
+	logout = (struct vdisk_req_logout *)(req + 1);
+	snprintf(logout->session_id, ARRAY_SIZE(logout->session_id),
+		 "%s", con->session_id);
+	r = vdisk_send_req(con->sock, req);
+	if (r)
+		goto free_req;
+
+	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGOUT,
+			    sizeof(*resp), (void **)&resp);
+	if (r)
+		goto free_req;
+
+	r = resp->r;
+	if (r)
+		goto free_resp;
+
+	r = 0;
+
+free_resp:
+	kfree(resp);
+free_req:
+	kfree(req);
+unlock:
+	up_write(&con->rw_sem);
+	return r;
 }

@@ -228,7 +228,7 @@ static ssize_t vdisk_session_attr_delete_disk_show(struct vdisk_session *sess,
 	return strlen(buf);
 }
 
-static ssize_t vdisk_session_attr_server_store(struct vdisk_session *session,
+static ssize_t vdisk_session_attr_connect_store(struct vdisk_session *session,
 						const char *buf, size_t count)
 {
 	unsigned int ip_part[4], port, ip;
@@ -251,24 +251,101 @@ static ssize_t vdisk_session_attr_server_store(struct vdisk_session *session,
 		ip += (ip_part[i] << (i * 8));
 	}
 
-	r = vdisk_session_set_server(session, (u32)ip, (u16)port);
+	r = vdisk_session_connect(session, (u32)ip, (u16)port);
 	if (r)
 		return r;
 
 	return count;
 }
 
-static ssize_t vdisk_session_attr_server_show(struct vdisk_session *session,
+static ssize_t vdisk_session_attr_connect_show(struct vdisk_session *session,
 						char *buf)
 {
 	unsigned char ip_part[4];
 	int i;
+	u32 ip;
+	u16 port;
+
+	down_read(&session->con.rw_sem);
+	ip = session->con.ip;
+	port = session->con.port;
+	up_read(&session->con.rw_sem);
 
 	for (i = 0; i < ARRAY_SIZE(ip_part); i++)
-		ip_part[i] = (session->ip >> (i * 8)) & 0xFF;
+		ip_part[i] = (ip >> (i * 8)) & 0xFF;
 
 	snprintf(buf, PAGE_SIZE, "%u.%u.%u.%u:%u\n",
-		ip_part[3], ip_part[2], ip_part[1], ip_part[0], session->port);
+		ip_part[3], ip_part[2], ip_part[1],
+		ip_part[0], session->con.port);
+
+	return strlen(buf);
+}
+
+static ssize_t vdisk_session_attr_disconnect_store(struct vdisk_session *sess,
+						const char *buf, size_t count)
+{
+	int r;
+
+	r = vdisk_session_disconnect(sess);
+	if (r)
+		return r;
+
+	return count;
+}
+
+static ssize_t vdisk_session_attr_disconnect_show(struct vdisk_session *session,
+						char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "\n");
+
+	return strlen(buf);
+}
+
+static ssize_t vdisk_session_attr_login_store(struct vdisk_session *session,
+					      const char *buf, size_t count)
+{
+	char user_name[VDISK_ID_SIZE], password[VDISK_ID_SIZE];
+	int r;
+
+	r = sscanf(buf, VDISK_ID_SCANF_FMT" "VDISK_ID_SCANF_FMT,
+		   user_name, password);
+	if (r < 2)
+		return -EINVAL;
+
+	user_name[VDISK_ID_SIZE - 1] = '\0';
+	password[VDISK_ID_SIZE - 1] = '\0';
+
+	r = vdisk_session_login(session, user_name, password);
+	if (r)
+		return r;
+
+	return count;
+}
+
+static ssize_t vdisk_session_attr_login_show(struct vdisk_session *session,
+					     char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "\n");
+
+	return strlen(buf);
+}
+
+static ssize_t vdisk_session_attr_logout_store(struct vdisk_session *session,
+					      const char *buf, size_t count)
+{
+	int r;
+
+	r = vdisk_session_logout(session);
+	if (r)
+		return r;
+
+	return count;
+}
+
+static ssize_t vdisk_session_attr_logout_show(struct vdisk_session *session,
+					     char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "\n");
 
 	return strlen(buf);
 }
@@ -464,12 +541,18 @@ struct kobj_type vdisk_disk_ktype = {
 
 static VDISK_SESSION_ATTR_RW(create_disk);
 static VDISK_SESSION_ATTR_RW(delete_disk);
-static VDISK_SESSION_ATTR_RW(server);
+static VDISK_SESSION_ATTR_RW(connect);
+static VDISK_SESSION_ATTR_RW(disconnect);
+static VDISK_SESSION_ATTR_RW(login);
+static VDISK_SESSION_ATTR_RW(logout);
 
 static struct attribute *vdisk_session_attrs[] = {
 	&vdisk_session_attr_create_disk.attr,
 	&vdisk_session_attr_delete_disk.attr,
-	&vdisk_session_attr_server.attr,
+	&vdisk_session_attr_connect.attr,
+	&vdisk_session_attr_disconnect.attr,
+	&vdisk_session_attr_login.attr,
+	&vdisk_session_attr_logout.attr,
 	NULL,
 };
 

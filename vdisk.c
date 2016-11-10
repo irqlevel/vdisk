@@ -84,16 +84,31 @@ void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 	disk->limit_bps[1] = limit_bps[1];
 }
 
-int vdisk_session_set_server(struct vdisk_session *session, u32 ip, u16 port)
+int vdisk_session_connect(struct vdisk_session *session, u32 ip, u16 port)
 {
-	TRACE("session 0x%p set server ip 0x%x port %u", session, ip, port);
+	int r;
 
-	down_write(&session->rw_sem);
-	session->ip = ip;
-	session->port = port;
-	up_write(&session->rw_sem);
+	TRACE("session 0x%p connecting ip 0x%x port %u", session, ip, port);
 
-	return 0;
+	r = vdisk_con_connect(&session->con, ip, port);
+
+	TRACE("session 0x%p connect ip 0x%x port %u, r %d",
+	      session, ip, port, r);
+
+	return r;
+}
+
+int vdisk_session_disconnect(struct vdisk_session *session)
+{
+	int r;
+
+	TRACE("session 0x%p disconnecting", session);
+
+	r = vdisk_con_close(&session->con);
+
+	TRACE("session 0x%p disconnect r %d", session, r);
+
+	return r;
 }
 
 static int vdisk_init_global(struct vdisk_global *glob)
@@ -446,6 +461,27 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 	}
 	up_write(&session->rw_sem);
 
+	return r;
+}
+
+int vdisk_session_login(struct vdisk_session *session,
+			char *user_name, char *password)
+{
+	int r;
+
+	r = vdisk_con_login(&session->con, user_name, password);
+	TRACE("session 0x%p login session_id %s r %d ",
+	      session, session->con.session_id, r);
+
+	return r;
+}
+
+int vdisk_session_logout(struct vdisk_session *session)
+{
+	int r;
+
+	r = vdisk_con_logout(&session->con);
+	TRACE("session 0x%p logout r %d", session, r);
 	return r;
 }
 
