@@ -339,8 +339,8 @@ io_error:
 	return BLK_QC_T_NONE;
 }
 
-int vdisk_session_create_disk(struct vdisk_session *session,
-			      int number, u64 size)
+static int vdisk_session_start_disk(struct vdisk_session *session,
+				    int number, u64 size, u64 disk_id)
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
@@ -363,9 +363,10 @@ int vdisk_session_create_disk(struct vdisk_session *session,
 		r = -ENOMEM;
 		goto free_number;
 	}
-
+	disk->session = session;
 	disk->number = number;
 	disk->size = size;
+	disk->disk_id = disk_id;
 	init_waitqueue_head(&disk->waitq);
 	rwlock_init(&disk->lock);
 	INIT_LIST_HEAD(&disk->req_list);
@@ -442,9 +443,32 @@ free_number:
 	return r;
 }
 
+int vdisk_session_create_disk(struct vdisk_session *session,
+			      int number, u64 size)
+{
+	u64 disk_id;
+	int r;
+
+	r = vdisk_con_disk_create(&session->con, size, &disk_id);
+	if (r)
+		return r;
+
+	TRACE("disk disk_id %llu size %llu created", disk_id, size);
+	r = vdisk_session_start_disk(session, number, size, disk_id);
+	if (r)
+		goto delete_disk;
+
+	return 0;
+
+delete_disk:
+	vdisk_con_disk_delete(&session->con, disk_id);
+	return r;
+}
+
 int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 {
 	struct vdisk *curr, *tmp;
+	u64 disk_id;
 	int r;
 
 	TRACE("deleting disk %d", number);
@@ -454,14 +478,26 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
 		if (curr->number == number) {
 			list_del_init(&curr->list);
+			disk_id = curr->disk_id;
 			vdisk_release(curr);
-			r = 0;
+			r = vdisk_con_disk_delete(&session->con, disk_id);
 			break;
 		}
 	}
 	up_write(&session->rw_sem);
 
 	return r;
+}
+
+int vdisk_session_open_disk(struct vdisk_session *session, int number,
+			    u64 disk_id)
+{
+	return -EINVAL;
+}
+
+int vdisk_session_close_disk(struct vdisk_session *session, int number)
+{
+	return -EINVAL;
 }
 
 int vdisk_session_login(struct vdisk_session *session,

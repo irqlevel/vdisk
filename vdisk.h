@@ -53,7 +53,7 @@ struct vdisk_resp_header {
 	__le32 magic;
 	__le32 type;
 	__le32 len;
-	__le32 padding;
+	__le32 result;
 };
 
 struct vdisk_req_login {
@@ -61,36 +61,43 @@ struct vdisk_req_login {
 	char password[VDISK_ID_SIZE];
 };
 
-struct vdisk_resp {
-	__le32 r;
-};
-
 struct vdisk_resp_login {
 	char session_id[VDISK_ID_SIZE];
-	__le32 r;
 };
 
 struct vdisk_req_logout {
 	char session_id[VDISK_ID_SIZE];
 };
 
+struct vdisk_resp_logout {
+	__le64 padding;
+};
+
 struct vdisk_req_disk_create {
 	char session_id[VDISK_ID_SIZE];
+	__le64 size;
+};
+
+struct vdisk_resp_disk_create {
+	__le64 disk_id;
 };
 
 struct vdisk_req_disk_delete {
 	char session_id[VDISK_ID_SIZE];
-	char disk_id[VDISK_ID_SIZE];
+	__le64 disk_id;
+};
+
+struct vdisk_resp_disk_delete {
+	__le64 padding;
 };
 
 struct vdisk_req_disk_open {
 	char session_id[VDISK_ID_SIZE];
-	char disk_id[VDISK_ID_SIZE];
+	__le64 disk_id;
 };
 
 struct vdisk_resp_disk_open {
 	char disk_handle[VDISK_ID_SIZE];
-	__le32 r;
 };
 
 struct vdisk_req_disk_close {
@@ -98,14 +105,23 @@ struct vdisk_req_disk_close {
 	char disk_handle[VDISK_ID_SIZE];
 };
 
+struct vdisk_resp_disk_close {
+	__le64 padding;
+};
+
 struct vdisk_req_disk_read {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
 };
 
+struct vdisk_resp_disk_read {
+	char data[4096];
+};
+
 struct vdisk_req_disk_write {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
+	char data[4096];
 };
 
 struct vdisk_bio {
@@ -124,8 +140,18 @@ struct vdisk_connection {
 	u16 port;
 };
 
+struct vdisk_session {
+	int number;
+	struct list_head list;
+	struct list_head disk_list;
+	struct rw_semaphore rw_sem;
+	struct vdisk_connection con;
+	struct vdisk_kobject_holder kobj_holder;
+};
+
 struct vdisk {
 	int number;
+	struct vdisk_session *session;
 	struct request_queue *queue;
 	struct gendisk *gdisk;
 	struct list_head list;
@@ -142,17 +168,9 @@ struct vdisk {
 	u64 limit_iops[2];
 	u64 entropy[2];
 	u64 size;
+	u64 disk_id;
 	bool releasing;
 	struct vdisk_connection con;
-};
-
-struct vdisk_session {
-	int number;
-	struct list_head list;
-	struct list_head disk_list;
-	struct rw_semaphore rw_sem;
-	struct vdisk_connection con;
-	struct vdisk_kobject_holder kobj_holder;
 };
 
 struct vdisk_global {
@@ -170,6 +188,11 @@ void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len);
 
 int vdisk_session_create_disk(struct vdisk_session *session,
 			      int number, u64 size);
+
+int vdisk_session_open_disk(struct vdisk_session *session, int number,
+			    u64 disk_id);
+
+int vdisk_session_close_disk(struct vdisk_session *session, int number);
 
 int vdisk_session_delete_disk(struct vdisk_session *session, int number);
 

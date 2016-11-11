@@ -17,5 +17,8 @@ int vdisk_con_login(struct vdisk_connection *con,
 
 int vdisk_con_logout(struct vdisk_connection *con);
 
+int vdisk_con_disk_create(struct vdisk_connection *con, u64 size, u64 *disk_id);
+
+int vdisk_con_disk_delete(struct vdisk_connection *con, u64 disk_id);
 
 #endif

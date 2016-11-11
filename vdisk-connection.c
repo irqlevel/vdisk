@@ -78,11 +78,12 @@ static int vdisk_send_req(struct socket *sock, struct vdisk_req_header *req)
 	return 0;
 }
 
-static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
+static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, u32 *result,
+			   void **body)
 {
 	struct vdisk_resp_header header;
 	u32 read;
-	u32 llen, ltype;
+	u32 llen, ltype, lresult;
 	void *lbody;
 	int r;
 
@@ -98,6 +99,7 @@ static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
 
 	ltype = le32_to_cpu(header.type);
 	llen = le32_to_cpu(header.len);
+	lresult = le32_to_cpu(header.result);
 	if (llen > VDISK_BODY_MAX)
 		return -EINVAL;
 	if (llen <= sizeof(header))
@@ -119,6 +121,7 @@ static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
 		goto free_body;
 	}
 
+	*result = lresult;
 	*body = lbody;
 
 	return 0;
@@ -133,7 +136,7 @@ int vdisk_con_login(struct vdisk_connection *con,
 	struct vdisk_req_header *req;
 	struct vdisk_req_login *login;
 	struct vdisk_resp_login *resp;
-	int r;
+	int r, result;
 
 	r = -ENOTTY;
 	down_write(&con->rw_sem);
@@ -157,11 +160,11 @@ int vdisk_con_login(struct vdisk_connection *con,
 		goto free_req;
 
 	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGIN,
-			    sizeof(*resp), (void **)&resp);
+			    sizeof(*resp), &result, (void **)&resp);
 	if (r)
 		goto free_req;
 
-	r = resp->r;
+	r = result;
 	if (r)
 		goto free_resp;
 
@@ -182,8 +185,9 @@ int vdisk_con_logout(struct vdisk_connection *con)
 {
 	struct vdisk_req_header *req;
 	struct vdisk_req_logout *logout;
-	struct vdisk_resp *resp;
+	struct vdisk_resp_logout *resp;
 	int r;
+	u32 result;
 
 	r = -ENOTTY;
 	down_write(&con->rw_sem);
@@ -204,11 +208,109 @@ int vdisk_con_logout(struct vdisk_connection *con)
 		goto free_req;
 
 	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGOUT,
-			    sizeof(*resp), (void **)&resp);
+			    sizeof(*resp), &result, (void **)&resp);
 	if (r)
 		goto free_req;
 
-	r = resp->r;
+	r = result;
+	if (r)
+		goto free_resp;
+
+	r = 0;
+
+free_resp:
+	kfree(resp);
+free_req:
+	kfree(req);
+unlock:
+	up_write(&con->rw_sem);
+	return r;
+}
+
+int vdisk_con_disk_create(struct vdisk_connection *con, u64 size, u64 *disk_id)
+{
+	struct vdisk_req_header *req;
+	struct vdisk_req_disk_create *disk_create;
+	struct vdisk_resp_disk_create *resp;
+	int r;
+	u32 result;
+
+	r = -ENOTTY;
+	down_write(&con->rw_sem);
+	if (!con->sock)
+		goto unlock;
+
+	req = vdisk_req_create(VDISK_REQ_TYPE_DISK_CREATE,
+			       sizeof(*disk_create));
+	if (!req) {
+		r = -ENOMEM;
+		goto unlock;
+	}
+
+	disk_create = (struct vdisk_req_disk_create *)(req + 1);
+	snprintf(disk_create->session_id, ARRAY_SIZE(disk_create->session_id),
+		 "%s", con->session_id);
+	disk_create->size = cpu_to_le64(size);
+
+	r = vdisk_send_req(con->sock, req);
+	if (r)
+		goto free_req;
+
+	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_CREATE,
+			    sizeof(*resp), &result, (void **)&resp);
+	if (r)
+		goto free_req;
+
+	r = result;
+	if (r)
+		goto free_resp;
+
+	*disk_id = le64_to_cpu(resp->disk_id);
+	r = 0;
+
+free_resp:
+	kfree(resp);
+free_req:
+	kfree(req);
+unlock:
+	up_write(&con->rw_sem);
+	return r;
+}
+
+int vdisk_con_disk_delete(struct vdisk_connection *con, u64 disk_id)
+{
+	struct vdisk_req_header *req;
+	struct vdisk_req_disk_delete *disk_delete;
+	struct vdisk_resp_disk_delete *resp;
+	int r;
+	u32 result;
+
+	r = -ENOTTY;
+	down_write(&con->rw_sem);
+	if (!con->sock)
+		goto unlock;
+
+	req = vdisk_req_create(VDISK_REQ_TYPE_DISK_DELETE,
+			       sizeof(*disk_delete));
+	if (!req) {
+		r = -ENOMEM;
+		goto unlock;
+	}
+
+	disk_delete = (struct vdisk_req_disk_delete *)(req + 1);
+	snprintf(disk_delete->session_id, ARRAY_SIZE(disk_delete->session_id),
+		 "%s", con->session_id);
+	disk_delete->disk_id = cpu_to_le64(disk_id);
+	r = vdisk_send_req(con->sock, req);
+	if (r)
+		goto free_req;
+
+	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_DELETE,
+			    sizeof(*resp), &result, (void **)&resp);
+	if (r)
+		goto free_req;
+
+	r = result;
 	if (r)
 		goto free_resp;
 
