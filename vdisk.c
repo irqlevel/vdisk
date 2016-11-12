@@ -216,6 +216,7 @@ static int vdisk_copy_from(struct vdisk *disk, void *buf, u64 off,
 {
 	int r;
 
+	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
 	r = vdisk_con_copy_from(&disk->session->con, disk->disk_id,
 				disk->disk_handle, buf, off, len, rw);
 	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
@@ -227,6 +228,7 @@ static int vdisk_copy_to(struct vdisk *disk, void *buf, u64 off,
 {
 	int r;
 
+	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
 	r = vdisk_con_copy_to(&disk->session->con, disk->disk_id,
 			      disk->disk_handle, buf, off, len, rw);
 	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
@@ -252,15 +254,45 @@ static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
 	return 0;
 }
 
+static int vdisk_discard(struct vdisk *disk, sector_t sector, u32 len)
+{
+	u64 off;
+	int r;
+
+	off = sector << SECTOR_SHIFT;
+
+	TRACE("disk 0x%p discard off %llu len %u", disk, off, len);
+
+	r = vdisk_con_discard(&disk->session->con, disk->disk_id,
+			      disk->disk_handle, off, len);
+
+	TRACE("disk 0x%p discard off %llu len %u r %d", disk, off, len, r);
+	return r;
+}
+
 static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
 {
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	sector_t sector;
-	u32 len;
+	u32 len, size;
 	int r;
 
+	TRACE("disk 0x%p process bio 0x%p rw 0x%x sector %lu size %u",
+	      disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
+	      bio->bi_iter.bi_size);
+
 	sector = bio->bi_iter.bi_sector;
+	size = bio->bi_iter.bi_size;
+
+	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
+		r = vdisk_discard(disk, sector, size);
+		if (r)
+			goto io_error;
+
+		goto complete;
+	}
+
 	bio_for_each_segment(bvec, bio, iter) {
 		len = bvec.bv_len;
 		r = vdisk_do_bvec(disk, bvec.bv_page, len,
@@ -269,6 +301,8 @@ static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
 			goto io_error;
 		sector += len >> SECTOR_SHIFT;
 	}
+
+complete:
 	bio_endio(bio);
 	return;
 
@@ -305,9 +339,6 @@ static int vdisk_thread_routine(void *data)
 			continue;
 
 		bio = vbio->bio;
-		TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
-			disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
-			bio->bi_iter.bi_size);
 		vdisk_process_bio(disk, bio);
 		bio_put(bio);
 		kfree(vbio);

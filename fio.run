@@ -1,0 +1,10 @@
+[global]
+ioengine=libaio
+bs=4k
+direct=1
+numjobs=4
+rw=randwrite
+
+[simple]
+size=64m
+filename=/mnt/vdisk1/fio-file

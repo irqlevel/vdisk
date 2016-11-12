@@ -3,6 +3,7 @@
 #include <linux/in.h>
 #include <net/sock.h>
 #include <linux/uaccess.h>
+#include <linux/tcp.h>
 
 u16 ksock_peer_port(struct socket *sock)
 {
@@ -71,6 +72,22 @@ out:
 	return error;
 }
 
+int ksock_set_nodelay(struct socket *sock, bool no_delay)
+{
+	int option;
+	int error;
+	mm_segment_t oldmm = get_fs();
+
+	option = (no_delay) ? 1 : 0;
+
+	set_fs(KERNEL_DS);
+	error = sock_setsockopt(sock, SOL_TCP, TCP_NODELAY,
+		(char *)&option, sizeof(option));
+	set_fs(oldmm);
+
+	return error;
+}
+
 int ksock_set_sendbufsize(struct socket *sock, int size)
 {
 	int option = size;
@@ -109,6 +126,10 @@ int ksock_connect(struct socket **sockp, __u32 local_ip, int local_port,
 	error = ksock_create(&sock, local_ip, local_port);
 	if (error)
 		goto out;
+
+	error = ksock_set_nodelay(sock, true);
+	if (error)
+		goto out_sock_release;
 
 	memset(&srvaddr, 0, sizeof(srvaddr));
 	srvaddr.sin_family = AF_INET;

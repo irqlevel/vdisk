@@ -12,6 +12,11 @@
 #define VDISK_SESSION_NUMBER_MAX 256
 #define VDISK_BLOCK_DEV_NAME "vdisk"
 
+#define VDISK_IO_FLUSH		0x1
+#define VDISK_IO_FUA		0x2
+#define VDISK_IO_DISCARD	0x4
+#define VDISK_IO_READA		0x8
+
 #define VDISK_REQ_MAGIC		0xCBDACBDA
 #define VDISK_RESP_MAGIC	0xCBDACBDA
 
@@ -23,6 +28,7 @@
 #define VDISK_REQ_TYPE_DISK_CLOSE	6
 #define VDISK_REQ_TYPE_DISK_READ	7
 #define VDISK_REQ_TYPE_DISK_WRITE	8
+#define VDISK_REQ_TYPE_DISK_DISCARD	9
 
 #define VDISK_BODY_MAX		65536
 
@@ -111,11 +117,6 @@ struct vdisk_resp_disk_close {
 	__le64 padding;
 };
 
-#define VDISK_IO_FLUSH		0x1
-#define VDISK_IO_FUA		0x2
-#define VDISK_IO_DISCARD	0x4
-#define VDISK_IO_READA		0x8
-
 static inline u32 vdisk_io_flags_by_rw(unsigned long rw)
 {
 	u32 flags;
@@ -140,6 +141,7 @@ struct vdisk_req_disk_read {
 	__le64 offset;
 	__le32 size;
 	__le32 flags;
+	char data[4096];
 };
 
 struct vdisk_resp_disk_read {
@@ -157,7 +159,20 @@ struct vdisk_req_disk_write {
 };
 
 struct vdisk_resp_disk_write {
-	__le64 padding;
+	char data[4096];
+};
+
+struct vdisk_req_disk_discard {
+	char session_id[VDISK_ID_SIZE];
+	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
+	__le64 offset;
+	__le32 size;
+	char data[4096];
+};
+
+struct vdisk_resp_disk_discard {
+	char data[4096];
 };
 
 struct vdisk_bio {
@@ -174,10 +189,18 @@ struct vdisk_connection {
 	char user_name[VDISK_ID_SIZE];
 	u32 ip;
 	u16 port;
-	struct vdisk_req_disk_read disk_read_req;
-	struct vdisk_resp_disk_read disk_read_resp;
-	struct vdisk_req_disk_write disk_write_req;
-	struct vdisk_resp_disk_write disk_write_resp;
+
+	struct vdisk_req_header read_req_header;
+	struct vdisk_req_disk_read read_req;
+	struct vdisk_resp_disk_read read_resp;
+
+	struct vdisk_req_header write_req_header;
+	struct vdisk_req_disk_write write_req;
+	struct vdisk_resp_disk_write write_resp;
+
+	struct vdisk_req_header discard_req_header;
+	struct vdisk_req_disk_discard discard_req;
+	struct vdisk_resp_disk_discard discard_resp;
 };
 
 struct vdisk_session {

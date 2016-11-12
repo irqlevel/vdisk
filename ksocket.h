@@ -38,4 +38,6 @@ void ksock_abort_accept(struct socket *sock);
 
 int ksock_ioctl(struct socket *sock, int cmd, unsigned long arg);
 
+int ksock_set_nodelay(struct socket *sock, bool no_delay);
+
 #endif
