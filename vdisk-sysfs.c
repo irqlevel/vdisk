@@ -191,6 +191,12 @@ static ssize_t vdisk_disk_attr_size_show(struct vdisk *disk, char *buf)
 	return strlen(buf);
 }
 
+static ssize_t vdisk_disk_attr_disk_handle_show(struct vdisk *disk, char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "%s\n", disk->disk_handle);
+	return strlen(buf);
+}
+
 static ssize_t vdisk_session_attr_create_disk_store(struct vdisk_session *sess,
 						const char *buf, size_t count)
 {
@@ -411,6 +417,15 @@ static ssize_t vdisk_session_attr_logout_show(struct vdisk_session *session,
 	return strlen(buf);
 }
 
+static ssize_t vdisk_session_attr_session_id_show(struct vdisk_session *session,
+					     char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "%s\n", session->con.session_id);
+
+	return strlen(buf);
+}
+
+
 static ssize_t vdisk_global_attr_create_session_store(struct vdisk_global *glob,
 			const char *buf, size_t count)
 {
@@ -578,6 +593,7 @@ static VDISK_DISK_ATTR_RW(limit_bps);
 static VDISK_DISK_ATTR_RO(entropy);
 static VDISK_DISK_ATTR_RO(disk_id);
 static VDISK_DISK_ATTR_RO(size);
+static VDISK_DISK_ATTR_RO(disk_handle);
 
 static struct attribute *vdisk_disk_attrs[] = {
 	&vdisk_disk_attr_iops.attr,
@@ -589,6 +605,7 @@ static struct attribute *vdisk_disk_attrs[] = {
 	&vdisk_disk_attr_entropy.attr,
 	&vdisk_disk_attr_disk_id.attr,
 	&vdisk_disk_attr_size.attr,
+	&vdisk_disk_attr_disk_handle.attr,
 	NULL,
 };
 
@@ -612,6 +629,7 @@ static VDISK_SESSION_ATTR_RW(connect);
 static VDISK_SESSION_ATTR_RW(disconnect);
 static VDISK_SESSION_ATTR_RW(login);
 static VDISK_SESSION_ATTR_RW(logout);
+static VDISK_SESSION_ATTR_RO(session_id);
 
 static struct attribute *vdisk_session_attrs[] = {
 	&vdisk_session_attr_create_disk.attr,
@@ -622,6 +640,7 @@ static struct attribute *vdisk_session_attrs[] = {
 	&vdisk_session_attr_disconnect.attr,
 	&vdisk_session_attr_login.attr,
 	&vdisk_session_attr_logout.attr,
+	&vdisk_session_attr_session_id.attr,
 	NULL,
 };
 

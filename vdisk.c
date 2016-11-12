@@ -24,40 +24,7 @@
 #include "vdisk.h"
 #include "vdisk-sysfs.h"
 #include "vdisk-connection.h"
-
-
-#define CREATE_TRACE_POINTS
-#include "vdisk-trace.h"
-
-static inline void vdisk_trace_printf(const char *fmt, ...)
-{
-	va_list args;
-
-	va_start(args, fmt);
-	trace_printf(fmt, args);
-	va_end(args);
-}
-
-static inline void vdisk_trace_error(int err, const char *fmt, ...)
-{
-	va_list args;
-
-	va_start(args, fmt);
-	trace_error(err, fmt, args);
-	va_end(args);
-}
-
-#define TRACE(fmt, ...)						\
-do {								\
-	vdisk_trace_printf("%s: " fmt,				\
-				__func__, ##__VA_ARGS__);	\
-} while (false)
-
-#define TRACE_ERR(err, fmt, ...)			\
-do {							\
-	vdisk_trace_error(err, "%s: " fmt,		\
-			      __func__, ##__VA_ARGS__);	\
-} while (false)
+#include "vdisk-trace-helpers.h"
 
 static struct vdisk_global global_context;
 
@@ -140,11 +107,17 @@ free_blk:
 	return r;
 }
 
-static void vdisk_release(struct vdisk *disk)
+static int vdisk_release(struct vdisk *disk)
 {
 	struct vdisk_global *glob = vdisk_get_global();
+	int r;
 
 	TRACE("disk 0x%p number %d releasing", disk, disk->number);
+
+	r = vdisk_con_close_disk(&disk->session->con, disk->disk_id,
+			     disk->disk_handle);
+
+	TRACE("disk 0x%p close disk r %d", disk, r);
 
 	del_gendisk(disk->gdisk);
 	blk_cleanup_queue(disk->queue);
@@ -164,6 +137,7 @@ static void vdisk_release(struct vdisk *disk)
 	kfree(disk);
 
 	TRACE("disk 0x%p released", disk);
+	return r;
 }
 
 static void vdisk_session_release(struct vdisk_session *session)
@@ -237,6 +211,71 @@ static const struct block_device_operations vdisk_fops = {
 	.ioctl = vdisk_ioctl,
 };
 
+static int vdisk_copy_from(struct vdisk *disk, void *buf, u64 off,
+			   u32 len, unsigned long rw)
+{
+	int r;
+
+	r = vdisk_con_copy_from(&disk->session->con, disk->disk_id,
+				disk->disk_handle, buf, off, len, rw);
+	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
+	return r;
+}
+
+static int vdisk_copy_to(struct vdisk *disk, void *buf, u64 off,
+			 u32 len, unsigned long rw)
+{
+	int r;
+
+	r = vdisk_con_copy_to(&disk->session->con, disk->disk_id,
+			      disk->disk_handle, buf, off, len, rw);
+	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
+	return r;
+}
+
+static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
+			 u32 len, u32 offset, unsigned long rw, sector_t sector)
+{
+	void *addr;
+	u64 off;
+	int r;
+
+	off = sector << SECTOR_SHIFT;
+	addr = kmap(page);
+	if (!(rw & REQ_WRITE))
+		r = vdisk_copy_from(disk, (unsigned char *)addr + offset,
+				    off, len, rw);
+	else
+		r = vdisk_copy_to(disk, (unsigned char *)addr + offset,
+				  off, len, rw);
+	kunmap(page);
+	return 0;
+}
+
+static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
+{
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	sector_t sector;
+	u32 len;
+	int r;
+
+	sector = bio->bi_iter.bi_sector;
+	bio_for_each_segment(bvec, bio, iter) {
+		len = bvec.bv_len;
+		r = vdisk_do_bvec(disk, bvec.bv_page, len,
+				  bvec.bv_offset, bio->bi_rw, sector);
+		if (r)
+			goto io_error;
+		sector += len >> SECTOR_SHIFT;
+	}
+	bio_endio(bio);
+	return;
+
+io_error:
+	bio_io_error(bio);
+}
+
 static int vdisk_thread_routine(void *data)
 {
 	struct vdisk *disk = data;
@@ -269,7 +308,7 @@ static int vdisk_thread_routine(void *data)
 		TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
 			disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
 			bio->bi_iter.bi_size);
-		bio_io_error(bio);
+		vdisk_process_bio(disk, bio);
 		bio_put(bio);
 		kfree(vbio);
 	}
@@ -340,7 +379,8 @@ io_error:
 }
 
 static int vdisk_session_start_disk(struct vdisk_session *session,
-				    int number, u64 size, u64 disk_id)
+				    int number, u64 size, u64 disk_id,
+				    char *disk_handle)
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
@@ -367,6 +407,8 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	disk->number = number;
 	disk->size = size;
 	disk->disk_id = disk_id;
+	snprintf(disk->disk_handle, ARRAY_SIZE(disk->disk_handle),
+		"%s", disk_handle);
 	init_waitqueue_head(&disk->waitq);
 	rwlock_init(&disk->lock);
 	INIT_LIST_HEAD(&disk->req_list);
@@ -447,21 +489,40 @@ int vdisk_session_create_disk(struct vdisk_session *session,
 			      int number, u64 size)
 {
 	u64 disk_id;
+	char *disk_handle;
 	int r;
 
-	r = vdisk_con_disk_create(&session->con, size, &disk_id);
+	r = vdisk_con_create_disk(&session->con, size, &disk_id);
 	if (r)
 		return r;
 
 	TRACE("disk disk_id %llu size %llu created", disk_id, size);
-	r = vdisk_session_start_disk(session, number, size, disk_id);
-	if (r)
-		goto delete_disk;
 
+	r = vdisk_con_open_disk(&session->con, disk_id, &disk_handle, &size);
+	if (r) {
+		TRACE_ERR(r, "can't open disk");
+		goto delete_disk;
+	}
+
+	TRACE("disk %llu open r %d", disk_id, r);
+
+	r = vdisk_session_start_disk(session, number, size, disk_id,
+					disk_handle);
+	if (r) {
+		TRACE_ERR(r, "can't start disk");
+		goto close_disk;
+	}
+
+	TRACE("disk %llu start r %d", disk_id, r);
+
+	kfree(disk_handle);
 	return 0;
 
+close_disk:
+	vdisk_con_close_disk(&session->con, disk_id, disk_handle);
+	kfree(disk_handle);
 delete_disk:
-	vdisk_con_disk_delete(&session->con, disk_id);
+	vdisk_con_delete_disk(&session->con, disk_id);
 	return r;
 }
 
@@ -480,7 +541,7 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 			list_del_init(&curr->list);
 			disk_id = curr->disk_id;
 			vdisk_release(curr);
-			r = vdisk_con_disk_delete(&session->con, disk_id);
+			r = vdisk_con_delete_disk(&session->con, disk_id);
 			break;
 		}
 	}
@@ -492,12 +553,58 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 int vdisk_session_open_disk(struct vdisk_session *session, int number,
 			    u64 disk_id)
 {
-	return -EINVAL;
+	int r;
+	char *disk_handle;
+	u64 size;
+
+	r = vdisk_con_open_disk(&session->con, disk_id, &disk_handle, &size);
+	if (r) {
+		TRACE_ERR(r, "cant open disk");
+		return r;
+	}
+
+	TRACE("session 0x%p open disk %llu r %d", session, disk_id, r);
+
+	r = vdisk_session_start_disk(session, number, size,
+				     disk_id, disk_handle);
+	if (r) {
+		TRACE_ERR(r, "can't start disk");
+		goto close_disk;
+	}
+
+	TRACE("session 0x%p start disk %llu r %d", session, disk_id, r);
+
+	r = 0;
+	goto free_handle;
+
+close_disk:
+	vdisk_con_close_disk(&session->con, disk_id, disk_handle);
+free_handle:
+	kfree(disk_handle);
+	return r;
 }
 
 int vdisk_session_close_disk(struct vdisk_session *session, int number)
 {
-	return -EINVAL;
+	struct vdisk *curr, *tmp;
+	int r;
+
+	TRACE("closing disk %d", number);
+
+	r = -ENOTTY;
+	down_write(&session->rw_sem);
+	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
+		if (curr->number == number) {
+			list_del_init(&curr->list);
+			r = vdisk_release(curr);
+			TRACE("disk 0x%p number %d closed r %d",
+			      curr, number, r);
+			break;
+		}
+	}
+	up_write(&session->rw_sem);
+
+	return r;
 }
 
 int vdisk_session_login(struct vdisk_session *session,

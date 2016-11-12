@@ -98,20 +98,48 @@ struct vdisk_req_disk_open {
 
 struct vdisk_resp_disk_open {
 	char disk_handle[VDISK_ID_SIZE];
+	__le64 size;
 };
 
 struct vdisk_req_disk_close {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
 };
 
 struct vdisk_resp_disk_close {
 	__le64 padding;
 };
 
+#define VDISK_IO_FLUSH		0x1
+#define VDISK_IO_FUA		0x2
+#define VDISK_IO_DISCARD	0x4
+#define VDISK_IO_READA		0x8
+
+static inline u32 vdisk_io_flags_by_rw(unsigned long rw)
+{
+	u32 flags;
+
+	flags = 0;
+	if (rw & REQ_FLUSH)
+		flags |= VDISK_IO_FLUSH;
+	if (rw & REQ_FUA)
+		flags |= VDISK_IO_FUA;
+	if (rw & REQ_DISCARD)
+		flags |= VDISK_IO_DISCARD;
+	if (rw & REQ_RAHEAD)
+		flags |= VDISK_IO_READA;
+
+	return flags;
+}
+
 struct vdisk_req_disk_read {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
+	__le64 offset;
+	__le32 size;
+	__le32 flags;
 };
 
 struct vdisk_resp_disk_read {
@@ -121,7 +149,15 @@ struct vdisk_resp_disk_read {
 struct vdisk_req_disk_write {
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
+	__le64 offset;
+	__le32 size;
+	__le32 flags;
 	char data[4096];
+};
+
+struct vdisk_resp_disk_write {
+	__le64 padding;
 };
 
 struct vdisk_bio {
@@ -138,6 +174,10 @@ struct vdisk_connection {
 	char user_name[VDISK_ID_SIZE];
 	u32 ip;
 	u16 port;
+	struct vdisk_req_disk_read disk_read_req;
+	struct vdisk_resp_disk_read disk_read_resp;
+	struct vdisk_req_disk_write disk_write_req;
+	struct vdisk_resp_disk_write disk_write_resp;
 };
 
 struct vdisk_session {
@@ -171,6 +211,7 @@ struct vdisk {
 	u64 disk_id;
 	bool releasing;
 	struct vdisk_connection con;
+	char disk_handle[VDISK_ID_SIZE];
 };
 
 struct vdisk_global {
