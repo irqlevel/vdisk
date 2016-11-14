@@ -51,6 +51,8 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 		goto unlock;
 	}
 
+	con->ip = ip;
+	con->port = port;
 	con->sock = sock;
 	r = 0;
 unlock:
@@ -64,6 +66,8 @@ int vdisk_con_close(struct vdisk_connection *con)
 	if (con->sock) {
 		ksock_release(con->sock);
 		con->sock = NULL;
+		con->ip = 0;
+		con->port = 0;
 	}
 	up_write(&con->rw_sem);
 	return 0;

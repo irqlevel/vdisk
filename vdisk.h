@@ -39,6 +39,8 @@
 #define VDISK_CACHE_PAGES	4
 #define VDISK_CACHE_SIZE	(VDISK_CACHE_PAGES * PAGE_SIZE)
 
+#define VDISK_QUEUE_MAX		2
+
 struct vdisk_kobject_holder {
 	struct kobject kobj;
 	struct completion completion;
@@ -186,9 +188,9 @@ struct vdisk_connection {
 	struct rw_semaphore rw_sem;
 	struct socket *sock;
 	char session_id[VDISK_ID_SIZE];
-	char disk_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
 	char user_name[VDISK_ID_SIZE];
+
 	u32 ip;
 	u16 port;
 
@@ -214,17 +216,27 @@ struct vdisk_session {
 	struct vdisk_kobject_holder kobj_holder;
 };
 
+struct vdisk;
+
+struct vdisk_queue {
+	struct vdisk *disk;
+	struct vdisk_connection con;
+	wait_queue_head_t waitq;
+	rwlock_t lock;
+	struct list_head req_list;
+	struct task_struct *thread;
+	int index;
+};
+
 struct vdisk {
 	int number;
 	struct vdisk_session *session;
-	struct request_queue *queue;
+	struct request_queue *req_queue;
 	struct gendisk *gdisk;
 	struct list_head list;
 	rwlock_t lock;
-	wait_queue_head_t waitq;
-	struct list_head req_list;
+	struct vdisk_queue queue[VDISK_QUEUE_MAX];
 	struct vdisk_kobject_holder kobj_holder;
-	struct task_struct *thread;
 	u64 bps[2];
 	u64 iops[2];
 	u64 max_bps[2];
@@ -235,7 +247,6 @@ struct vdisk {
 	u64 size;
 	u64 disk_id;
 	bool releasing;
-	struct vdisk_connection con;
 	char disk_handle[VDISK_ID_SIZE];
 
 	rwlock_t cache_lock;

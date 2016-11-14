@@ -113,13 +113,14 @@ static struct vdisk_cache *vdisk_cache_insert(struct vdisk *disk,
 	return curr;
 }
 
-static int __vdisk_cache_read(struct vdisk_cache *cache)
+static int __vdisk_cache_read(struct vdisk_cache *cache,
+				struct vdisk_connection *con)
 {
 	struct vdisk *disk;
 	int r;
 
 	disk = cache->disk;
-	r = vdisk_con_copy_from(&disk->session->con, disk->disk_id,
+	r = vdisk_con_copy_from(con, disk->disk_id,
 				disk->disk_handle, cache->data,
 				cache->index * VDISK_CACHE_SIZE,
 				VDISK_CACHE_SIZE, 0);
@@ -128,7 +129,9 @@ static int __vdisk_cache_read(struct vdisk_cache *cache)
 	return r;
 }
 
-static int __vdisk_cache_write(struct vdisk_cache *cache, unsigned long rw)
+static int __vdisk_cache_write(struct vdisk_cache *cache,
+				struct vdisk_connection *con,
+				unsigned long rw)
 {
 	struct vdisk *disk;
 	int r;
@@ -139,7 +142,7 @@ static int __vdisk_cache_write(struct vdisk_cache *cache, unsigned long rw)
 		return -EINVAL;
 
 	disk = cache->disk;
-	r = vdisk_con_copy_to(&disk->session->con, disk->disk_id,
+	r = vdisk_con_copy_to(con, disk->disk_id,
 			      disk->disk_handle, cache->data,
 			      cache->index * VDISK_CACHE_SIZE,
 			      VDISK_CACHE_SIZE, rw);
@@ -193,7 +196,7 @@ static void vdisk_cache_evict(struct work_struct *work)
 	list_for_each_entry_safe(curr, tmp, &list, list) {
 		down_write(&curr->rw_sem);
 		if (curr->dirty) {
-			r = __vdisk_cache_write(curr, 0);
+			r = __vdisk_cache_write(curr, &disk->session->con, 0);
 			if (r)
 				TRACE_ERR(r, "can't write cache %llu r %d",
 					  curr->index, r);
@@ -238,7 +241,8 @@ void vdisk_cache_deinit(struct vdisk *disk)
 
 			down_write(&curr->rw_sem);
 			if (curr->dirty) {
-				r = __vdisk_cache_write(curr, WRITE_FLUSH_FUA);
+				r = __vdisk_cache_write(curr,
+					&disk->session->con, WRITE_FLUSH_FUA);
 				if (!r)
 					curr->dirty = false;
 				else
@@ -270,8 +274,9 @@ static struct vdisk_cache *vdisk_cache_get_or_create(struct vdisk *disk,
 	return cache;
 }
 
-int vdisk_cache_discard(struct vdisk *disk, sector_t sector, u32 len)
+int vdisk_cache_discard(struct vdisk_queue *queue, sector_t sector, u32 len)
 {
+	struct vdisk *disk = queue->disk;
 	u64 off;
 	int r;
 
@@ -279,14 +284,15 @@ int vdisk_cache_discard(struct vdisk *disk, sector_t sector, u32 len)
 
 	TRACE("disk 0x%p discard off %llu len %u", disk, off, len);
 
-	r = vdisk_con_discard(&disk->session->con, disk->disk_id,
+	r = vdisk_con_discard(&queue->con, disk->disk_id,
 			      disk->disk_handle, off, len);
 
 	TRACE("disk 0x%p discard off %llu len %u r %d", disk, off, len, r);
 	return r;
 }
 
-static int __vdisk_cache_copy_from(struct vdisk_cache *cache, u32 off, u32 len,
+static int __vdisk_cache_copy_from(struct vdisk_cache *cache,
+			struct vdisk_connection *con, u32 off, u32 len,
 			void *buf)
 {
 	int r;
@@ -304,7 +310,7 @@ static int __vdisk_cache_copy_from(struct vdisk_cache *cache, u32 off, u32 len,
 
 	down_write(&cache->rw_sem);
 	if (!cache->valid) {
-		r = __vdisk_cache_read(cache);
+		r = __vdisk_cache_read(cache, con);
 		if (r) {
 			TRACE_ERR(r, "can't read cache %llu", cache->index);
 			goto unlock;
@@ -320,14 +326,15 @@ unlock:
 	return r;
 }
 
-static int __vdisk_cache_copy_to(struct vdisk_cache *cache, u32 off, u32 len,
+static int __vdisk_cache_copy_to(struct vdisk_cache *cache,
+			struct vdisk_connection *con, u32 off, u32 len,
 			void *buf, unsigned long rw)
 {
 	int r;
 
 	down_write(&cache->rw_sem);
 	if (!cache->valid) {
-		r = __vdisk_cache_read(cache);
+		r = __vdisk_cache_read(cache, con);
 		if (r) {
 			TRACE_ERR(r, "can't read cache %llu", cache->index);
 			goto unlock;
@@ -340,7 +347,7 @@ static int __vdisk_cache_copy_to(struct vdisk_cache *cache, u32 off, u32 len,
 	r = 0;
 
 	if ((rw & REQ_FLUSH) || (rw & REQ_FUA)) {
-		r = __vdisk_cache_write(cache, rw);
+		r = __vdisk_cache_write(cache, con, rw);
 		if (r)
 			TRACE_ERR(r, "can't write cache %llu", cache->index);
 	}
@@ -364,14 +371,16 @@ static void vdisk_cache_trim(struct vdisk *disk)
 		queue_work(disk->cache_wq, &disk->cache_evict_work);
 }
 
-int vdisk_cache_copy_from(struct vdisk *disk, void *buf, u64 off,
+int vdisk_cache_copy_from(struct vdisk_queue *queue, void *buf, u64 off,
 			  u32 len, unsigned long rw)
 {
+	struct vdisk *disk;
 	struct vdisk_cache *cache;
 	u64 loff;
 	u32 llen;
 	int r;
 
+	disk = queue->disk;
 	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
 
 	loff = off;
@@ -390,7 +399,7 @@ int vdisk_cache_copy_from(struct vdisk *disk, void *buf, u64 off,
 		if (can > llen)
 			can = llen;
 
-		r = __vdisk_cache_copy_from(cache, coff, can,
+		r = __vdisk_cache_copy_from(cache, &queue->con, coff, can,
 					(unsigned char *)buf + len - llen);
 		vdisk_cache_put(cache, true);
 		if (r)
@@ -401,20 +410,24 @@ int vdisk_cache_copy_from(struct vdisk *disk, void *buf, u64 off,
 	}
 
 out:
-	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
+	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d",
+	      disk, off, len, rw, r);
 	vdisk_cache_trim(disk);
 	return r;
 }
 
-int vdisk_cache_copy_to(struct vdisk *disk, void *buf, u64 off,
+int vdisk_cache_copy_to(struct vdisk_queue *queue, void *buf, u64 off,
 			u32 len, unsigned long rw)
 {
+	struct vdisk *disk;
 	struct vdisk_cache *cache;
 	u64 loff;
 	u32 llen;
 	int r;
 
-	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
+	disk = queue->disk;
+	TRACE("disk 0x%p off %llu len %u rw 0x%x",
+	      disk, off, len, rw);
 
 	loff = off;
 	llen = len;
@@ -432,7 +445,7 @@ int vdisk_cache_copy_to(struct vdisk *disk, void *buf, u64 off,
 		if (can > llen)
 			can = llen;
 
-		r = __vdisk_cache_copy_to(cache, coff, can,
+		r = __vdisk_cache_copy_to(cache, &queue->con, coff, can,
 					(unsigned char *)buf + len - llen,
 					rw);
 		vdisk_cache_put(cache, true);
@@ -444,7 +457,8 @@ int vdisk_cache_copy_to(struct vdisk *disk, void *buf, u64 off,
 	}
 
 out:
-	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
+	TRACE("disk 0x%p q %d off %llu len %u rw 0x%x r %d",
+	      disk, off, len, rw, r);
 	vdisk_cache_trim(disk);
 	return r;
 }

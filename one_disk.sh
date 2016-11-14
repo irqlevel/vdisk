@@ -12,4 +12,4 @@ cat /sys/fs/vdisk/session1/vdisk1/disk_handle
 mkfs.ext4 /dev/vdisk1
 rm -rf /mnt/vdisk1
 mkdir /mnt/vdisk1
-mount -t ext4 /dev/vdisk1 /mnt/vdisk1
+mount -t ext4 -o barrier=1,data=journal /dev/vdisk1 /mnt/vdisk1

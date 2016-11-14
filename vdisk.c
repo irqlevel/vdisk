@@ -110,14 +110,27 @@ free_blk:
 	return r;
 }
 
+static void vdisk_queue_deinit(struct vdisk *disk, int index)
+{
+	struct vdisk_queue *queue = &disk->queue[index];
+
+	vdisk_con_close(&queue->con);
+	kthread_stop(queue->thread);
+	put_task_struct(queue->thread);
+	WARN_ON(!list_empty(&queue->req_list));
+}
+
 static int vdisk_release(struct vdisk *disk)
 {
 	struct vdisk_global *glob = vdisk_get_global();
-	int r;
+	int r, i;
 
 	TRACE("disk 0x%p number %d releasing", disk, disk->number);
 
 	del_gendisk(disk->gdisk);
+
+	for (i = 0; i < ARRAY_SIZE(disk->queue); i++)
+		vdisk_queue_deinit(disk, i);
 
 	vdisk_cache_deinit(disk);
 
@@ -126,14 +139,7 @@ static int vdisk_release(struct vdisk *disk)
 
 	TRACE("disk 0x%p close disk r %d", disk, r);
 
-	blk_cleanup_queue(disk->queue);
-
-	TRACE("disk 0x%p stopping thread", disk);
-
-	kthread_stop(disk->thread);
-	put_task_struct(disk->thread);
-
-	TRACE("disk 0x%p thread stopped", disk);
+	blk_cleanup_queue(disk->req_queue);
 
 	put_disk(disk->gdisk);
 
@@ -217,7 +223,7 @@ static const struct block_device_operations vdisk_fops = {
 	.ioctl = vdisk_ioctl,
 };
 
-static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
+static int vdisk_do_bvec(struct vdisk_queue *queue, struct page *page,
 			 u32 len, u32 offset, unsigned long rw, sector_t sector)
 {
 	void *addr;
@@ -227,16 +233,16 @@ static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
 	off = sector << SECTOR_SHIFT;
 	addr = kmap(page);
 	if (!(rw & REQ_WRITE))
-		r = vdisk_cache_copy_from(disk, (unsigned char *)addr + offset,
+		r = vdisk_cache_copy_from(queue, (unsigned char *)addr + offset,
 					  off, len, rw);
 	else
-		r = vdisk_cache_copy_to(disk, (unsigned char *)addr + offset,
+		r = vdisk_cache_copy_to(queue, (unsigned char *)addr + offset,
 					off, len, rw);
 	kunmap(page);
 	return 0;
 }
 
-static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
+static void vdisk_process_bio(struct vdisk_queue *queue, struct bio *bio)
 {
 	struct bio_vec bvec;
 	struct bvec_iter iter;
@@ -244,15 +250,15 @@ static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
 	u32 len, size;
 	int r;
 
-	TRACE("disk 0x%p process bio 0x%p rw 0x%x sector %lu size %u",
-	      disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
-	      bio->bi_iter.bi_size);
+	TRACE("disk 0x%p q %d process bio 0x%p rw 0x%x sector %lu size %u",
+	      queue->disk, queue->index, bio, bio->bi_rw,
+	      bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
 
 	sector = bio->bi_iter.bi_sector;
 	size = bio->bi_iter.bi_size;
 
 	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
-		r = vdisk_cache_discard(disk, sector, size);
+		r = vdisk_cache_discard(queue, sector, size);
 		if (r)
 			goto io_error;
 
@@ -261,7 +267,7 @@ static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
 
 	bio_for_each_segment(bvec, bio, iter) {
 		len = bvec.bv_len;
-		r = vdisk_do_bvec(disk, bvec.bv_page, len,
+		r = vdisk_do_bvec(queue, bvec.bv_page, len,
 				  bvec.bv_offset, bio->bi_rw, sector);
 		if (r)
 			goto io_error;
@@ -278,58 +284,59 @@ io_error:
 
 static int vdisk_thread_routine(void *data)
 {
-	struct vdisk *disk = data;
+	struct vdisk_queue *queue = data;
 	struct vdisk_bio *vbio, *tmp;
 	struct list_head req_list;
 	struct bio *bio;
 	unsigned long irq_flags;
 
-	TRACE("disk 0x%p thread starting", disk);
+	TRACE("disk 0x%p q %d thread starting", queue->disk, queue->index);
 
 	for (;;) {
-		wait_event_interruptible(disk->waitq,
+		wait_event_interruptible(queue->waitq,
 			(kthread_should_stop() ||
-			 !list_empty(&disk->req_list)));
+			 !list_empty(&queue->req_list)));
 		if (kthread_should_stop()) {
-			TRACE("disk 0x%p thread should stop", disk);
+			TRACE("disk 0x%p q %d thread should stop",
+			      queue->disk, queue->index);
 			break;
 		}
 
-		write_lock_irqsave(&disk->lock, irq_flags);
-		vbio = list_first_entry_or_null(&disk->req_list,
+		write_lock_irqsave(&queue->lock, irq_flags);
+		vbio = list_first_entry_or_null(&queue->req_list,
 						struct vdisk_bio, list);
 		if (vbio)
 			list_del_init(&vbio->list);
-		write_unlock_irqrestore(&disk->lock, irq_flags);
+		write_unlock_irqrestore(&queue->lock, irq_flags);
 		if (!vbio)
 			continue;
 
 		bio = vbio->bio;
-		vdisk_process_bio(disk, bio);
+		vdisk_process_bio(queue, bio);
 		bio_put(bio);
 		vdisk_kfree(vbio);
 	}
 
-	TRACE("disk 0x%p thread stopping", disk);
+	TRACE("disk 0x%p q %d thread stopping", queue->disk, queue->index);
 
 	/* cancel all requests */
 	INIT_LIST_HEAD(&req_list);
-	write_lock_irqsave(&disk->lock, irq_flags);
-	list_splice_init(&disk->req_list, &req_list);
-	write_unlock_irqrestore(&disk->lock, irq_flags);
+	write_lock_irqsave(&queue->lock, irq_flags);
+	list_splice_init(&queue->req_list, &req_list);
+	write_unlock_irqrestore(&queue->lock, irq_flags);
 
 	list_for_each_entry_safe(vbio, tmp, &req_list, list) {
 		list_del_init(&vbio->list);
 		bio = vbio->bio;
-		TRACE("disk 0x%p cancel bio 0x%p rw 0x%x sector %lu size %u",
-			disk, bio, bio->bi_rw, bio->bi_iter.bi_sector,
-			bio->bi_iter.bi_size);
+		TRACE("disk 0x%p q %d cancel bio 0x%p rw 0x%x sec %lu size %u",
+			queue->disk, queue->index, bio, bio->bi_rw,
+			bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
 		bio_io_error(bio);
 		bio_put(bio);
 		vdisk_kfree(vbio);
 	}
 
-	TRACE("disk 0x%p thread stopped", disk);
+	TRACE("disk 0x%p q %d thread stopped", queue->disk, queue->index);
 	return 0;
 }
 
@@ -338,8 +345,10 @@ static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
 	struct block_device *bdev = bio->bi_bdev;
 	struct vdisk *disk = bdev->bd_disk->private_data;
 	struct vdisk_bio *vbio;
+	struct vdisk_queue *queue;
 	sector_t sector;
 	unsigned long irq_flags;
+	int cpu;
 
 	sector = bio->bi_iter.bi_sector;
 	TRACE("disk 0x%p bio 0x%p rw 0x%x sector %lu size %u",
@@ -360,11 +369,15 @@ static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
 	bio_get(bio);
 	vbio->bio = bio;
 
-	write_lock_irqsave(&disk->lock, irq_flags);
-	list_add_tail(&vbio->list, &disk->req_list);
-	write_unlock_irqrestore(&disk->lock, irq_flags);
+	cpu = get_cpu();
+	queue = &disk->queue[cpu % ARRAY_SIZE(disk->queue)];
+	put_cpu();
 
-	wake_up_interruptible(&disk->waitq);
+	write_lock_irqsave(&queue->lock, irq_flags);
+	list_add_tail(&vbio->list, &queue->req_list);
+	write_unlock_irqrestore(&queue->lock, irq_flags);
+
+	wake_up_interruptible(&queue->waitq);
 	return BLK_QC_T_NONE;
 
 io_error:
@@ -375,6 +388,56 @@ io_error:
 	return BLK_QC_T_NONE;
 }
 
+static int vdisk_queue_init(struct vdisk *disk, int index)
+{
+	struct vdisk_queue *queue;
+	struct task_struct *thread;
+	int r;
+
+	if (WARN_ON(index >= ARRAY_SIZE(disk->queue)))
+		return -EINVAL;
+
+	queue = &disk->queue[index];
+	queue->index = index;
+	queue->disk = disk;
+	INIT_LIST_HEAD(&queue->req_list);
+	init_waitqueue_head(&queue->waitq);
+	rwlock_init(&queue->lock);
+
+	r = vdisk_con_init(&queue->con);
+	if (r)
+		return r;
+
+	r = vdisk_con_connect(&queue->con, disk->session->con.ip,
+			      disk->session->con.port);
+	if (r)
+		goto deinit_con;
+
+	snprintf(queue->con.session_id, ARRAY_SIZE(queue->con.session_id), "%s",
+		 disk->session->con.session_id);
+	snprintf(queue->con.disk_handle, ARRAY_SIZE(queue->con.disk_handle),
+		 "%s", disk->session->con.disk_handle);
+
+	thread = kthread_create(vdisk_thread_routine, queue,
+				"vdisk%d-queue-%d", disk->number, index);
+	if (IS_ERR(thread)) {
+		r = PTR_ERR(thread);
+		goto close_con;
+	}
+
+	get_task_struct(thread);
+	queue->thread = thread;
+	wake_up_process(queue->thread);
+
+	return 0;
+
+close_con:
+	vdisk_con_close(&queue->con);
+deinit_con:
+	vdisk_con_deinit(&queue->con);
+	return r;
+}
+
 static int vdisk_session_start_disk(struct vdisk_session *session,
 				    int number, u64 size, u64 disk_id,
 				    char *disk_handle)
@@ -382,8 +445,7 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
 	struct gendisk *gdisk;
-	struct task_struct *thread;
-	int r;
+	int r, i;
 
 	if (number < 0 || number >= VDISK_DISK_NUMBER_MAX)
 		return -EINVAL;
@@ -406,39 +468,37 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	disk->disk_id = disk_id;
 	snprintf(disk->disk_handle, ARRAY_SIZE(disk->disk_handle),
 		"%s", disk_handle);
-	init_waitqueue_head(&disk->waitq);
-	rwlock_init(&disk->lock);
-	INIT_LIST_HEAD(&disk->req_list);
 
 	r = vdisk_cache_init(disk);
 	if (r)
 		goto free_disk;
 
-	thread = kthread_create(vdisk_thread_routine, disk,
-				"vdisk%d-thread", disk->number);
-	if (IS_ERR(thread)) {
-		r = PTR_ERR(thread);
-		goto free_cache;
+	for (i = 0; i < ARRAY_SIZE(disk->queue); i++) {
+		r = vdisk_queue_init(disk, i);
+		if (r) {
+			int j;
+
+			for (j = 0; j < i; j++)
+				vdisk_queue_deinit(disk, j);
+
+			goto free_cache;
+		}
 	}
 
-	get_task_struct(thread);
-	disk->thread = thread;
-	wake_up_process(disk->thread);
-
-	disk->queue = blk_alloc_queue(GFP_KERNEL);
-	if (!disk->queue) {
+	disk->req_queue = blk_alloc_queue(GFP_KERNEL);
+	if (!disk->req_queue) {
 		r = -ENOMEM;
-		goto free_thread;
+		goto free_queues;
 	}
 
-	blk_queue_make_request(disk->queue, vdisk_make_request);
-	blk_queue_max_hw_sectors(disk->queue, 1024);
-	blk_queue_bounce_limit(disk->queue, BLK_BOUNCE_ANY);
+	blk_queue_make_request(disk->req_queue, vdisk_make_request);
+	blk_queue_max_hw_sectors(disk->req_queue, 1024);
+	blk_queue_bounce_limit(disk->req_queue, BLK_BOUNCE_ANY);
 
-	disk->queue->limits.discard_granularity = PAGE_SIZE;
-	disk->queue->limits.max_discard_sectors = UINT_MAX;
-	disk->queue->limits.discard_zeroes_data = 1;
-	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, disk->queue);
+	disk->req_queue->limits.discard_granularity = PAGE_SIZE;
+	disk->req_queue->limits.max_discard_sectors = UINT_MAX;
+	disk->req_queue->limits.discard_zeroes_data = 1;
+	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, disk->req_queue);
 
 	gdisk = alloc_disk(1);
 	if (!gdisk) {
@@ -450,7 +510,7 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	gdisk->first_minor = disk->number;
 	gdisk->fops = &vdisk_fops;
 	gdisk->private_data = disk;
-	gdisk->queue = disk->queue;
+	gdisk->queue = disk->req_queue;
 	gdisk->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
 	snprintf(gdisk->disk_name, sizeof(gdisk->disk_name),
 		 VDISK_BLOCK_DEV_NAME"%d", disk->number);
@@ -475,10 +535,10 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 free_gdisk:
 	put_disk(gdisk);
 free_queue:
-	blk_cleanup_queue(disk->queue);
-free_thread:
-	kthread_stop(disk->thread);
-	put_task_struct(disk->thread);
+	blk_cleanup_queue(disk->req_queue);
+free_queues:
+	for (i = 0; i < ARRAY_SIZE(disk->queue); i++)
+		vdisk_queue_deinit(disk, i);
 free_cache:
 	vdisk_cache_deinit(disk);
 free_disk:
