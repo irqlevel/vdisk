@@ -8,7 +8,7 @@ static struct vdisk_req_header *vdisk_req_create(u32 type, u32 len)
 	u32 total_len;
 
 	total_len = sizeof(*req) + len;
-	req = kmalloc(total_len, GFP_KERNEL);
+	req = vdisk_kmalloc(total_len, GFP_KERNEL);
 	if (!req)
 		return NULL;
 
@@ -163,13 +163,13 @@ static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
 	void *lbody;
 	int r;
 
-	lbody = kmalloc(len, GFP_KERNEL);
+	lbody = vdisk_kmalloc(len, GFP_KERNEL);
 	if (!lbody)
 		return -ENOMEM;
 
 	r = __vdisk_recv_resp(sock, type, len, lbody);
 	if (r) {
-		kfree(lbody);
+		vdisk_kfree(lbody);
 		return r;
 	}
 	*body = lbody;
@@ -212,9 +212,9 @@ int vdisk_con_login(struct vdisk_connection *con,
 
 	snprintf(con->session_id, ARRAY_SIZE(con->session_id),
 		 "%s", resp->session_id);
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -250,9 +250,9 @@ int vdisk_con_logout(struct vdisk_connection *con)
 	if (r)
 		goto free_req;
 
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -293,9 +293,9 @@ int vdisk_con_create_disk(struct vdisk_connection *con, u64 size, u64 *disk_id)
 
 	*disk_id = le64_to_cpu(resp->disk_id);
 
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -333,9 +333,9 @@ int vdisk_con_delete_disk(struct vdisk_connection *con, u64 disk_id)
 	if (r)
 		goto free_req;
 
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -378,7 +378,7 @@ int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
 
 	resp->disk_handle[ARRAY_SIZE(resp->disk_handle) - 1] = '\0';
 	count = strlen(resp->disk_handle) + 1;
-	ldisk_handle = kcalloc(count, sizeof(char), GFP_KERNEL);
+	ldisk_handle = vdisk_kcalloc(count, sizeof(char), GFP_KERNEL);
 	if (!ldisk_handle) {
 		r = -ENOMEM;
 		TRACE_ERR(r, "can't alloc disk handle");
@@ -390,9 +390,9 @@ int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
 	r = 0;
 
 free_resp:
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -435,9 +435,9 @@ int vdisk_con_close_disk(struct vdisk_connection *con, u64 disk_id,
 	if (r)
 		goto free_req;
 
-	kfree(resp);
+	vdisk_kfree(resp);
 free_req:
-	kfree(req);
+	vdisk_kfree(req);
 unlock:
 	up_write(&con->rw_sem);
 	return r;

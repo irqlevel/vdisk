@@ -2,8 +2,8 @@
 WDIR=temp
 
 echo 1 > /sys/fs/vdisk/create_session
-echo 127.0.0.1:9111 > /sys/fs/vdisk/session1/connect
-echo a@b.com 1q > /sys/fs/vdisk/session1/login
+echo 185.87.193.120:9111 > /sys/fs/vdisk/session1/connect
+echo a@b.com 1q2w3e > /sys/fs/vdisk/session1/login
 cat /sys/fs/vdisk/session1/session_id
 echo 1 $((256 * 1024 * 1024)) > /sys/fs/vdisk/session1/create_disk
 cat /sys/fs/vdisk/session1/vdisk1/disk_id

@@ -7,6 +7,7 @@
 #include <linux/kobject.h>
 #include <linux/zlib.h>
 #include <linux/net.h>
+#include <linux/radix-tree.h>
 
 #define VDISK_DISK_NUMBER_MAX 256
 #define VDISK_SESSION_NUMBER_MAX 256
@@ -34,6 +35,9 @@
 
 #define VDISK_ID_SIZE		256
 #define VDISK_ID_SCANF_FMT	"%255s"
+
+#define VDISK_CACHE_PAGES	4
+#define VDISK_CACHE_SIZE	(VDISK_CACHE_PAGES * PAGE_SIZE)
 
 struct vdisk_kobject_holder {
 	struct kobject kobj;
@@ -141,11 +145,10 @@ struct vdisk_req_disk_read {
 	__le64 offset;
 	__le32 size;
 	__le32 flags;
-	char data[4096];
 };
 
 struct vdisk_resp_disk_read {
-	char data[4096];
+	char data[VDISK_CACHE_SIZE];
 };
 
 struct vdisk_req_disk_write {
@@ -155,11 +158,11 @@ struct vdisk_req_disk_write {
 	__le64 offset;
 	__le32 size;
 	__le32 flags;
-	char data[4096];
+	char data[VDISK_CACHE_SIZE];
 };
 
 struct vdisk_resp_disk_write {
-	char data[4096];
+	__le64 padding;
 };
 
 struct vdisk_req_disk_discard {
@@ -168,11 +171,10 @@ struct vdisk_req_disk_discard {
 	__le64 disk_id;
 	__le64 offset;
 	__le32 size;
-	char data[4096];
 };
 
 struct vdisk_resp_disk_discard {
-	char data[4096];
+	__le64 padding;
 };
 
 struct vdisk_bio {
@@ -235,6 +237,26 @@ struct vdisk {
 	bool releasing;
 	struct vdisk_connection con;
 	char disk_handle[VDISK_ID_SIZE];
+
+	rwlock_t cache_lock;
+	struct radix_tree_root cache_root;
+	u64 cache_entries;
+	u64 cache_limit;
+	struct work_struct cache_evict_work;
+	struct workqueue_struct *cache_wq;
+	atomic_t cache_evicting;
+};
+
+struct vdisk_cache {
+	struct vdisk *disk;
+	struct list_head list;
+	void *data;
+	unsigned long index;
+	atomic_t ref_count;
+	struct rw_semaphore rw_sem;
+	bool valid;
+	bool dirty;
+	atomic_t pin_count;
 };
 
 struct vdisk_global {
@@ -272,5 +294,13 @@ int vdisk_session_logout(struct vdisk_session *session);
 int vdisk_global_create_session(struct vdisk_global *glob, int number);
 
 int vdisk_global_delete_session(struct vdisk_global *glob, int number);
+
+void *vdisk_kzalloc(size_t size, gfp_t flags);
+
+void *vdisk_kcalloc(size_t n, size_t size, gfp_t flags);
+
+void *vdisk_kmalloc(size_t size, gfp_t flags);
+
+void vdisk_kfree(void *ptr);
 
 #endif

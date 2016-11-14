@@ -5,6 +5,7 @@
  */
 
 #include "vdisk-sysfs.h"
+#include "vdisk-cache.h"
 
 #define VDISK_DISK_ATTR_RO(_name) \
 struct vdisk_disk_sysfs_attr vdisk_disk_attr_##_name = \
@@ -194,6 +195,34 @@ static ssize_t vdisk_disk_attr_size_show(struct vdisk *disk, char *buf)
 static ssize_t vdisk_disk_attr_disk_handle_show(struct vdisk *disk, char *buf)
 {
 	snprintf(buf, PAGE_SIZE, "%s\n", disk->disk_handle);
+	return strlen(buf);
+}
+
+static ssize_t vdisk_disk_attr_cache_limit_store(struct vdisk *disk,
+					   const char *buf, size_t count)
+{
+	u64 limit;
+	int r;
+
+	r = sscanf(buf, "%llu", &limit);
+	if (r < 1)
+		return -EINVAL;
+
+	vdisk_cache_set_limit(disk, limit);
+
+	return count;
+}
+
+static ssize_t vdisk_disk_attr_cache_limit_show(struct vdisk *disk, char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "%llu\n", disk->cache_limit);
+	return strlen(buf);
+}
+
+static ssize_t vdisk_disk_attr_cache_usage_show(struct vdisk *disk, char *buf)
+{
+	snprintf(buf, PAGE_SIZE, "%llu\n",
+		 disk->cache_entries * VDISK_CACHE_SIZE);
 	return strlen(buf);
 }
 
@@ -594,6 +623,8 @@ static VDISK_DISK_ATTR_RO(entropy);
 static VDISK_DISK_ATTR_RO(disk_id);
 static VDISK_DISK_ATTR_RO(size);
 static VDISK_DISK_ATTR_RO(disk_handle);
+static VDISK_DISK_ATTR_RW(cache_limit);
+static VDISK_DISK_ATTR_RO(cache_usage);
 
 static struct attribute *vdisk_disk_attrs[] = {
 	&vdisk_disk_attr_iops.attr,
@@ -606,6 +637,8 @@ static struct attribute *vdisk_disk_attrs[] = {
 	&vdisk_disk_attr_disk_id.attr,
 	&vdisk_disk_attr_size.attr,
 	&vdisk_disk_attr_disk_handle.attr,
+	&vdisk_disk_attr_cache_limit.attr,
+	&vdisk_disk_attr_cache_usage.attr,
 	NULL,
 };
 

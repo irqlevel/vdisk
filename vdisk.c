@@ -25,6 +25,9 @@
 #include "vdisk-sysfs.h"
 #include "vdisk-connection.h"
 #include "vdisk-trace-helpers.h"
+#include "vdisk-cache.h"
+#include "vdisk-malloc-checker.h"
+#include "vdisk-helpers.h"
 
 static struct vdisk_global global_context;
 
@@ -99,7 +102,7 @@ static int vdisk_init_global(struct vdisk_global *glob)
 		goto free_blk;
 
 	glob->major = major;
-	pr_info("vdisk: major %d", glob->major);
+	PRINTK("major %d", glob->major);
 	return 0;
 
 free_blk:
@@ -114,12 +117,15 @@ static int vdisk_release(struct vdisk *disk)
 
 	TRACE("disk 0x%p number %d releasing", disk, disk->number);
 
+	del_gendisk(disk->gdisk);
+
+	vdisk_cache_deinit(disk);
+
 	r = vdisk_con_close_disk(&disk->session->con, disk->disk_id,
 			     disk->disk_handle);
 
 	TRACE("disk 0x%p close disk r %d", disk, r);
 
-	del_gendisk(disk->gdisk);
 	blk_cleanup_queue(disk->queue);
 
 	TRACE("disk 0x%p stopping thread", disk);
@@ -134,7 +140,7 @@ static int vdisk_release(struct vdisk *disk)
 	vdisk_sysfs_deinit(&disk->kobj_holder);
 
 	clear_bit(disk->number, glob->disk_numbers);
-	kfree(disk);
+	vdisk_kfree(disk);
 
 	TRACE("disk 0x%p released", disk);
 	return r;
@@ -160,7 +166,7 @@ static void vdisk_session_release(struct vdisk_session *session)
 
 	clear_bit(session->number, glob->session_numbers);
 
-	kfree(session);
+	vdisk_kfree(session);
 
 	TRACE("sesson 0x%p released", session);
 }
@@ -211,30 +217,6 @@ static const struct block_device_operations vdisk_fops = {
 	.ioctl = vdisk_ioctl,
 };
 
-static int vdisk_copy_from(struct vdisk *disk, void *buf, u64 off,
-			   u32 len, unsigned long rw)
-{
-	int r;
-
-	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
-	r = vdisk_con_copy_from(&disk->session->con, disk->disk_id,
-				disk->disk_handle, buf, off, len, rw);
-	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
-	return r;
-}
-
-static int vdisk_copy_to(struct vdisk *disk, void *buf, u64 off,
-			 u32 len, unsigned long rw)
-{
-	int r;
-
-	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
-	r = vdisk_con_copy_to(&disk->session->con, disk->disk_id,
-			      disk->disk_handle, buf, off, len, rw);
-	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d", disk, off, len, rw, r);
-	return r;
-}
-
 static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
 			 u32 len, u32 offset, unsigned long rw, sector_t sector)
 {
@@ -245,29 +227,13 @@ static int vdisk_do_bvec(struct vdisk *disk, struct page *page,
 	off = sector << SECTOR_SHIFT;
 	addr = kmap(page);
 	if (!(rw & REQ_WRITE))
-		r = vdisk_copy_from(disk, (unsigned char *)addr + offset,
-				    off, len, rw);
+		r = vdisk_cache_copy_from(disk, (unsigned char *)addr + offset,
+					  off, len, rw);
 	else
-		r = vdisk_copy_to(disk, (unsigned char *)addr + offset,
-				  off, len, rw);
+		r = vdisk_cache_copy_to(disk, (unsigned char *)addr + offset,
+					off, len, rw);
 	kunmap(page);
 	return 0;
-}
-
-static int vdisk_discard(struct vdisk *disk, sector_t sector, u32 len)
-{
-	u64 off;
-	int r;
-
-	off = sector << SECTOR_SHIFT;
-
-	TRACE("disk 0x%p discard off %llu len %u", disk, off, len);
-
-	r = vdisk_con_discard(&disk->session->con, disk->disk_id,
-			      disk->disk_handle, off, len);
-
-	TRACE("disk 0x%p discard off %llu len %u r %d", disk, off, len, r);
-	return r;
 }
 
 static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
@@ -286,7 +252,7 @@ static void vdisk_process_bio(struct vdisk *disk, struct bio *bio)
 	size = bio->bi_iter.bi_size;
 
 	if (unlikely(bio->bi_rw & REQ_DISCARD)) {
-		r = vdisk_discard(disk, sector, size);
+		r = vdisk_cache_discard(disk, sector, size);
 		if (r)
 			goto io_error;
 
@@ -341,7 +307,7 @@ static int vdisk_thread_routine(void *data)
 		bio = vbio->bio;
 		vdisk_process_bio(disk, bio);
 		bio_put(bio);
-		kfree(vbio);
+		vdisk_kfree(vbio);
 	}
 
 	TRACE("disk 0x%p thread stopping", disk);
@@ -360,7 +326,7 @@ static int vdisk_thread_routine(void *data)
 			bio->bi_iter.bi_size);
 		bio_io_error(bio);
 		bio_put(bio);
-		kfree(vbio);
+		vdisk_kfree(vbio);
 	}
 
 	TRACE("disk 0x%p thread stopped", disk);
@@ -388,7 +354,7 @@ static blk_qc_t vdisk_make_request(struct request_queue *q, struct bio *bio)
 			goto io_error;
 	}
 
-	vbio = kmalloc(sizeof(*vbio), GFP_NOIO);
+	vbio = vdisk_kmalloc(sizeof(*vbio), GFP_NOIO);
 	if (!vbio)
 		goto io_error;
 	bio_get(bio);
@@ -421,7 +387,7 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 
 	if (number < 0 || number >= VDISK_DISK_NUMBER_MAX)
 		return -EINVAL;
-	if (size & 511 || size & 4095)
+	if (size & 511 || (size % VDISK_CACHE_SIZE) != 0)
 		return -EINVAL;
 
 	TRACE("creating disk %d", number);
@@ -429,7 +395,7 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	if (test_and_set_bit(number, glob->disk_numbers) != 0)
 		return -EINVAL;
 
-	disk = kzalloc(sizeof(*disk), GFP_KERNEL);
+	disk = vdisk_kzalloc(sizeof(*disk), GFP_KERNEL);
 	if (!disk) {
 		r = -ENOMEM;
 		goto free_number;
@@ -444,11 +410,15 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	rwlock_init(&disk->lock);
 	INIT_LIST_HEAD(&disk->req_list);
 
+	r = vdisk_cache_init(disk);
+	if (r)
+		goto free_disk;
+
 	thread = kthread_create(vdisk_thread_routine, disk,
 				"vdisk%d-thread", disk->number);
 	if (IS_ERR(thread)) {
 		r = PTR_ERR(thread);
-		goto free_disk;
+		goto free_cache;
 	}
 
 	get_task_struct(thread);
@@ -509,8 +479,10 @@ free_queue:
 free_thread:
 	kthread_stop(disk->thread);
 	put_task_struct(disk->thread);
+free_cache:
+	vdisk_cache_deinit(disk);
 free_disk:
-	kfree(disk);
+	vdisk_kfree(disk);
 free_number:
 	clear_bit(number, glob->disk_numbers);
 	return r;
@@ -546,12 +518,12 @@ int vdisk_session_create_disk(struct vdisk_session *session,
 
 	TRACE("disk %llu start r %d", disk_id, r);
 
-	kfree(disk_handle);
+	vdisk_kfree(disk_handle);
 	return 0;
 
 close_disk:
 	vdisk_con_close_disk(&session->con, disk_id, disk_handle);
-	kfree(disk_handle);
+	vdisk_kfree(disk_handle);
 delete_disk:
 	vdisk_con_delete_disk(&session->con, disk_id);
 	return r;
@@ -611,7 +583,7 @@ int vdisk_session_open_disk(struct vdisk_session *session, int number,
 close_disk:
 	vdisk_con_close_disk(&session->con, disk_id, disk_handle);
 free_handle:
-	kfree(disk_handle);
+	vdisk_kfree(disk_handle);
 	return r;
 }
 
@@ -674,7 +646,7 @@ int vdisk_global_create_session(struct vdisk_global *glob, int number)
 	if (test_and_set_bit(number, glob->session_numbers) != 0)
 		return -EINVAL;
 
-	session = kzalloc(sizeof(*session), GFP_KERNEL);
+	session = vdisk_kzalloc(sizeof(*session), GFP_KERNEL);
 	if (!session) {
 		r = -ENOMEM;
 		goto free_number;
@@ -702,7 +674,7 @@ int vdisk_global_create_session(struct vdisk_global *glob, int number)
 free_con:
 	vdisk_con_deinit(&session->con);
 free_session:
-	kfree(session);
+	vdisk_kfree(session);
 free_number:
 	clear_bit(number, glob->session_numbers);
 	return r;
@@ -733,18 +705,77 @@ int vdisk_global_delete_session(struct vdisk_global *glob, int number)
 	return r;
 }
 
+void *vdisk_kzalloc(size_t size, gfp_t flags)
+{
+#ifdef __MALLOC_CHECKER__
+	void *ptr;
+
+	ptr = vdisk_kmalloc(size, flags);
+	if (ptr)
+		memset(ptr, 0, size);
+
+	return ptr;
+#else
+	return kzalloc(size, flags);
+#endif
+}
+
+void *vdisk_kcalloc(size_t n, size_t size, gfp_t flags)
+{
+#ifdef __MALLOC_CHECKER__
+	void *ptr;
+
+	ptr = vdisk_kmalloc(n * size, flags);
+	if (ptr)
+		memset(ptr, 0, n * size);
+
+	return ptr;
+#else
+	return kcalloc(n, size, flags);
+#endif
+}
+
+void *vdisk_kmalloc(size_t size, gfp_t flags)
+{
+#ifdef __MALLOC_CHECKER__
+	return malloc_checker_kmalloc(size, flags);
+#else
+	return kmalloc(size, flags);
+#endif
+}
+
+void vdisk_kfree(void *ptr)
+{
+#ifdef __MALLOC_CHECKER__
+	malloc_checker_kfree(ptr);
+#else
+	kfree(ptr);
+#endif
+}
+
 static int __init vdisk_init(void)
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	int r;
 
+#ifdef __MALLOC_CHECKER__
+	r = malloc_checker_init();
+	if (r) {
+		PRINTK("malloc checker init r %d", r);
+		return r;
+	}
+#endif
+
 	r = vdisk_init_global(glob);
 	if (r) {
+#ifdef __MALLOC_CHECKER__
+		malloc_checker_deinit();
+#endif
 		pr_err("vdisk: cant init global, r %d", r);
 		return r;
 	}
 
-	pr_info("vdisk: inited, vdisk_init=0x%p global=0x%p", vdisk_init, glob);
+	PRINTK("inited, vdisk_init=0x%p global=0x%p", vdisk_init, glob);
 	return 0;
 }
 
@@ -754,7 +785,11 @@ static void __exit vdisk_exit(void)
 
 	vdisk_deinit_global(glob);
 
-	pr_info("vdisk: exited");
+#ifdef __MALLOC_CHECKER__
+	malloc_checker_deinit();
+#endif
+
+	PRINTK("exited");
 }
 
 module_init(vdisk_init)
