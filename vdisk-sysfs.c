@@ -1,9 +1,3 @@
-/*
- * Copyright (C) 2016 Andrey Smetanin <irqlevel@gmail.com>
- *
- * This file is released under the GPL.
- */
-
 #include "vdisk-sysfs.h"
 #include "vdisk-cache.h"
 

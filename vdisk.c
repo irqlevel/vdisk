@@ -1,9 +1,3 @@
-/*
- * Copyright (C) 2016 Andrey Smetanin <irqlevel@gmail.com>
- *
- * This file is released under the GPL.
- */
-
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/bio.h>
