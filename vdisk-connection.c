@@ -123,6 +123,10 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 		goto release_sock;
 	}
 
+	con->ip = ip;
+	con->port = port;
+	con->sock = sock;
+
 	mbedtls_ssl_set_bio(&con->ssl, con, vdisk_con_ssl_send,
 			    vdisk_con_ssl_recv, NULL);
 
@@ -130,15 +134,16 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 	if (r) {
 		TRACE_ERR(r, "ssl handshake failed");
 		r = -EIO;
-		goto release_sock;
+		goto reset_con;
 	}
 
-	con->ip = ip;
-	con->port = port;
-	con->sock = sock;
 	r = 0;
 	goto unlock;
 
+reset_con:
+	con->sock = NULL;
+	con->ip = 0;
+	con->port = 0;
 release_sock:
 	ksock_release(sock);
 unlock:
