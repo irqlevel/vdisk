@@ -42,7 +42,7 @@ void vdisk_con_deinit(struct vdisk_connection *con)
 	mbedtls_ctr_drbg_free(&con->ctr_drbg);
 }
 
-static int vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
+static int __vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
 {
 	struct vdisk_connection *con = ctx;
 	int r;
@@ -55,7 +55,7 @@ static int vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
 	return wrote;
 }
 
-static int vdisk_con_ssl_recv(void *ctx, unsigned char *buf, size_t len)
+static int __vdisk_con_ssl_recv(void *ctx, unsigned char *buf, size_t len)
 {
 	struct vdisk_connection *con = ctx;
 	int r;
@@ -127,8 +127,8 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 	con->port = port;
 	con->sock = sock;
 
-	mbedtls_ssl_set_bio(&con->ssl, con, vdisk_con_ssl_send,
-			    vdisk_con_ssl_recv, NULL);
+	mbedtls_ssl_set_bio(&con->ssl, con, __vdisk_con_ssl_send,
+			    __vdisk_con_ssl_recv, NULL);
 
 	r = mbedtls_ssl_handshake(&con->ssl);
 	if (r) {
@@ -165,7 +165,8 @@ int vdisk_con_close(struct vdisk_connection *con)
 	return 0;
 }
 
-static int __vdisk_send_req(struct socket *sock, u32 type, u32 len, void *req)
+static int __vdisk_send_req(struct vdisk_connection *con, u32 type, u32 len,
+			    void *req)
 {
 	struct vdisk_req_header *header;
 	u32 wrote;
@@ -182,9 +183,10 @@ static int __vdisk_send_req(struct socket *sock, u32 type, u32 len, void *req)
 	header->len = cpu_to_le32(len);
 	header->type = cpu_to_le32(type);
 
-	r = ksock_write(sock, req, len, &wrote);
-	if (r)
+	r = mbedtls_ssl_write(&con->ssl, req, len);
+	if (r < 0)
 		return r;
+	wrote = r;
 
 	if (wrote != len)
 		return -EIO;
@@ -192,14 +194,17 @@ static int __vdisk_send_req(struct socket *sock, u32 type, u32 len, void *req)
 	return 0;
 }
 
-static int vdisk_send_req(struct socket *sock, struct vdisk_req_header *req)
+static int vdisk_send_req(struct vdisk_connection *con,
+			  struct vdisk_req_header *req)
 {
 	u32 wrote;
 	int r;
 
-	r = ksock_write(sock, req, le32_to_cpu(req->len), &wrote);
-	if (r)
+	r = mbedtls_ssl_write(&con->ssl, (const unsigned char *)req,
+			      le32_to_cpu(req->len));
+	if (r < 0)
 		return r;
+	wrote = r;
 
 	if (wrote != le32_to_cpu(req->len))
 		return -EIO;
@@ -207,16 +212,19 @@ static int vdisk_send_req(struct socket *sock, struct vdisk_req_header *req)
 	return 0;
 }
 
-static int __vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void *body)
+static int __vdisk_recv_resp(struct vdisk_connection *con, u32 type, u32 len,
+			     void *body)
 {
 	struct vdisk_resp_header header;
 	u32 read;
 	u32 llen, ltype, lresult;
 	int r;
 
-	r = ksock_read(sock, &header, sizeof(header), &read);
-	if (r)
+	r = mbedtls_ssl_read(&con->ssl, (unsigned char *)&header,
+			     sizeof(header));
+	if (r < 0)
 		return r;
+	read = r;
 
 	if (read != sizeof(header))
 		return -EIO;
@@ -239,10 +247,10 @@ static int __vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void *body)
 		if (llen != len)
 			return -EINVAL;
 
-		r = ksock_read(sock, body, llen, &read);
-		if (r)
+		r = mbedtls_ssl_read(&con->ssl, body, llen);
+		if (r < 0)
 			return r;
-
+		read = r;
 		if (read != llen)
 			return -ENOMEM;
 	} else {
@@ -254,7 +262,8 @@ static int __vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void *body)
 	return lresult;
 }
 
-static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
+static int vdisk_recv_resp(struct vdisk_connection *con, u32 type, u32 len,
+			   void **body)
 {
 	void *lbody;
 	int r;
@@ -263,7 +272,7 @@ static int vdisk_recv_resp(struct socket *sock, u32 type, u32 len, void **body)
 	if (!lbody)
 		return -ENOMEM;
 
-	r = __vdisk_recv_resp(sock, type, len, lbody);
+	r = __vdisk_recv_resp(con, type, len, lbody);
 	if (r) {
 		vdisk_kfree(lbody);
 		return r;
@@ -297,11 +306,11 @@ int vdisk_con_login(struct vdisk_connection *con,
 	snprintf(login->password, ARRAY_SIZE(login->password),
 		 "%s", password);
 
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGIN,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_LOGIN,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -337,11 +346,11 @@ int vdisk_con_logout(struct vdisk_connection *con)
 	logout = (struct vdisk_req_logout *)(req + 1);
 	snprintf(logout->session_id, ARRAY_SIZE(logout->session_id),
 		 "%s", con->session_id);
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_LOGOUT,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_LOGOUT,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -378,11 +387,11 @@ int vdisk_con_create_disk(struct vdisk_connection *con, u64 size, u64 *disk_id)
 		 "%s", con->session_id);
 	disk_create->size = cpu_to_le64(size);
 
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_CREATE,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_CREATE,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -420,11 +429,11 @@ int vdisk_con_delete_disk(struct vdisk_connection *con, u64 disk_id)
 	snprintf(disk_delete->session_id, ARRAY_SIZE(disk_delete->session_id),
 		 "%s", con->session_id);
 	disk_delete->disk_id = cpu_to_le64(disk_id);
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_DELETE,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_DELETE,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -463,11 +472,11 @@ int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
 	snprintf(disk_open->session_id, ARRAY_SIZE(disk_open->session_id),
 		 "%s", con->session_id);
 	disk_open->disk_id = cpu_to_le64(disk_id);
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_OPEN,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_OPEN,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -522,11 +531,11 @@ int vdisk_con_close_disk(struct vdisk_connection *con, u64 disk_id,
 		"%s", disk_handle);
 
 	disk_close->disk_id = cpu_to_le64(disk_id);
-	r = vdisk_send_req(con->sock, req);
+	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
 
-	r = vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_CLOSE,
+	r = vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_CLOSE,
 			    sizeof(*resp), (void **)&resp);
 	if (r)
 		goto free_req;
@@ -566,12 +575,12 @@ int vdisk_con_copy_from(struct vdisk_connection *con, u64 disk_id,
 	req->size = cpu_to_le32(len);
 	req->flags = cpu_to_le32(vdisk_io_flags_by_rw(rw));
 
-	r = __vdisk_send_req(con->sock, VDISK_REQ_TYPE_DISK_READ,
+	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_READ,
 			     sizeof(*req_header) + sizeof(*req), req_header);
 	if (r)
 		goto unlock;
 
-	r = __vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_READ,
+	r = __vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_READ,
 			      sizeof(*resp), resp);
 	if (r)
 		goto unlock;
@@ -610,12 +619,12 @@ int vdisk_con_copy_to(struct vdisk_connection *con, u64 disk_id,
 
 	memcpy(req->data, buf, len);
 
-	r = __vdisk_send_req(con->sock, VDISK_REQ_TYPE_DISK_WRITE,
+	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_WRITE,
 			     sizeof(*req_header) + sizeof(*req), req_header);
 	if (r)
 		goto unlock;
 
-	r = __vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_WRITE,
+	r = __vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_WRITE,
 			      sizeof(*resp), resp);
 	if (r)
 		goto unlock;
@@ -647,12 +656,12 @@ int vdisk_con_discard(struct vdisk_connection *con, u64 disk_id,
 	req->offset = cpu_to_le64(off);
 	req->size = cpu_to_le32(len);
 
-	r = __vdisk_send_req(con->sock, VDISK_REQ_TYPE_DISK_DISCARD,
+	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_DISCARD,
 			     sizeof(*req_header) + sizeof(*req), req_header);
 	if (r)
 		goto unlock;
 
-	r = __vdisk_recv_resp(con->sock, VDISK_REQ_TYPE_DISK_DISCARD,
+	r = __vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_DISCARD,
 			      sizeof(*resp), resp);
 	if (r)
 		goto unlock;
