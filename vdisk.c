@@ -110,6 +110,7 @@ static void vdisk_queue_deinit(struct vdisk *disk, int index)
 	struct vdisk_queue *queue = &disk->queue[index];
 
 	vdisk_con_close(&queue->con);
+	vdisk_con_deinit(&queue->con);
 	kthread_stop(queue->thread);
 	put_task_struct(queue->thread);
 	WARN_ON(!list_empty(&queue->req_list));
@@ -154,6 +155,7 @@ static void vdisk_session_release(struct vdisk_session *session)
 
 	TRACE("session 0x%p number %d releasing", session, session->number);
 
+	vdisk_con_close(&session->con);
 	vdisk_con_deinit(&session->con);
 
 	down_write(&session->rw_sem);

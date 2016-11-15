@@ -261,6 +261,9 @@ static struct vdisk_cache *vdisk_cache_get_or_create(struct vdisk *disk,
 {
 	struct vdisk_cache *cache, *new;
 
+	if (((index + 1) * VDISK_CACHE_SIZE) > disk->size)
+		return NULL;
+
 	cache = vdisk_cache_lookup(disk, index, pin);
 	if (cache)
 		return cache;
@@ -383,6 +386,12 @@ int vdisk_cache_copy_from(struct vdisk_queue *queue, void *buf, u64 off,
 	disk = queue->disk;
 	TRACE("disk 0x%p off %llu len %u rw 0x%x", disk, off, len, rw);
 
+	if ((off + len) > disk->size) {
+		r = -EINVAL;
+		TRACE_ERR(r, "read beyond disk off %llu len %u", off, len);
+		return r;
+	}
+
 	loff = off;
 	llen = len;
 	while (llen) {
@@ -429,6 +438,12 @@ int vdisk_cache_copy_to(struct vdisk_queue *queue, void *buf, u64 off,
 	TRACE("disk 0x%p off %llu len %u rw 0x%x",
 	      disk, off, len, rw);
 
+	if ((off + len) > disk->size) {
+		r = -EINVAL;
+		TRACE_ERR(r, "write beyond disk off %llu len %u", off, len);
+		return r;
+	}
+
 	loff = off;
 	llen = len;
 	while (llen) {
@@ -457,7 +472,7 @@ int vdisk_cache_copy_to(struct vdisk_queue *queue, void *buf, u64 off,
 	}
 
 out:
-	TRACE("disk 0x%p q %d off %llu len %u rw 0x%x r %d",
+	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d",
 	      disk, off, len, rw, r);
 	vdisk_cache_trim(disk);
 	return r;

@@ -6,9 +6,10 @@ buffered=0
 numjobs=4
 rw=write
 
-[raw]
+[dev-rand-write]
 size=128m
 filename=/dev/vdisk1
+rw=randwrite
 
 [fs-write]
 size=64m

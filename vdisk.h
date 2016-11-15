@@ -215,7 +215,7 @@ struct vdisk_connection {
 	mbedtls_ssl_config ssl_conf;
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
-	mbedtls_x509_crt ca;
+	mbedtls_x509_crt ssl_ca;
 };
 
 struct vdisk_session {
