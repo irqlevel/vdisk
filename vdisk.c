@@ -22,6 +22,7 @@
 #include "vdisk-cache.h"
 #include "vdisk-malloc-checker.h"
 #include "vdisk-helpers.h"
+#include "mbedtls-helpers.h"
 
 static struct vdisk_global global_context;
 
@@ -819,6 +820,8 @@ static int __init vdisk_init(void)
 		return r;
 	}
 #endif
+
+	mbedtls_setup_callbacks();
 
 	r = vdisk_init_global(glob);
 	if (r) {

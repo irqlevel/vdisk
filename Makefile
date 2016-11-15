@@ -20,7 +20,7 @@ vdisk-mod-y  += vdisk.o vdisk-sysfs.o vdisk-connection.o ksocket.o	\
 		mbedtls/ssl_ciphersuites.o mbedtls/x509_crt.o		\
 		mbedtls/pk_wrap.o mbedtls/ecdsa.o mbedtls/hmac_drbg.o	\
 		mbedtls/pkparse.o mbedtls/pkcs5.o mbedtls/pkcs12.o	\
-		mbedtls/entropy.o mbedtls/ctr_drbg.o
+		mbedtls/entropy.o mbedtls/ctr_drbg.o mbedtls/platform.o	\
 
 obj-m = $(VDISK_MOD).o
 
