@@ -212,9 +212,10 @@ struct vdisk_connection {
 	struct vdisk_resp_disk_discard discard_resp;
 
 	mbedtls_ssl_context ssl;
+	mbedtls_ssl_config ssl_conf;
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
-	mbedtls_ssl_config config;
+	mbedtls_x509_crt ca;
 };
 
 struct vdisk_session {

@@ -22,12 +22,50 @@ int vdisk_con_init(struct vdisk_connection *con)
 {
 	memset(con, 0, sizeof(*con));
 	init_rwsem(&con->rw_sem);
+
+	mbedtls_ctr_drbg_init(&con->ctr_drbg);
+	mbedtls_ssl_init(&con->ssl);
+	mbedtls_ssl_config_init(&con->ssl_conf);
+	mbedtls_entropy_init(&con->entropy);
+	mbedtls_x509_crt_init(&con->ca);
 	return 0;
 }
 
 void vdisk_con_deinit(struct vdisk_connection *con)
 {
 	vdisk_con_close(con);
+
+	mbedtls_x509_crt_free(&con->ca);
+	mbedtls_entropy_free(&con->entropy);
+	mbedtls_ssl_config_free(&con->ssl_conf);
+	mbedtls_ssl_free(&con->ssl);
+	mbedtls_ctr_drbg_free(&con->ctr_drbg);
+}
+
+static int vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
+{
+	struct vdisk_connection *con = ctx;
+	int r;
+	u32 wrote;
+
+	r = ksock_write(con->sock, (void *)buf, len, &wrote);
+	if (r)
+		return r;
+
+	return wrote;
+}
+
+static int vdisk_con_ssl_recv(void *ctx, unsigned char *buf, size_t len)
+{
+	struct vdisk_connection *con = ctx;
+	int r;
+	u32 read;
+
+	r = ksock_read(con->sock, buf, len, &read);
+	if (r)
+		return r;
+
+	return read;
 }
 
 int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
@@ -41,20 +79,68 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 		goto unlock;
 	}
 
-	r = ksock_connect(&sock, 0, 0, ip, port);
-	if (r)
+	r = mbedtls_ctr_drbg_seed(&con->ctr_drbg, mbedtls_entropy_func,
+		&con->entropy, "custom", strlen("custom"));
+	if (r) {
+		TRACE_ERR(r, "ctr drbg seed failed");
+		r = -EIO;
 		goto unlock;
+	}
+
+	r = mbedtls_ssl_config_defaults(&con->ssl_conf,
+					MBEDTLS_SSL_IS_CLIENT,
+					MBEDTLS_SSL_TRANSPORT_STREAM,
+					MBEDTLS_SSL_PRESET_DEFAULT);
+
+	if (r) {
+		TRACE_ERR(r, "ssl config defaults failed");
+		r = -EIO;
+		goto unlock;
+	}
+
+	mbedtls_ssl_conf_rng(&con->ssl_conf, mbedtls_ctr_drbg_random,
+			     &con->ctr_drbg);
+
+	mbedtls_ssl_conf_authmode(&con->ssl_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+
+
+	r = mbedtls_ssl_setup(&con->ssl, &con->ssl_conf);
+	if (r) {
+		TRACE_ERR(r, "ssl setup failed");
+		r = -EIO;
+		goto unlock;
+	}
+
+	r = ksock_connect(&sock, 0, 0, ip, port);
+	if (r) {
+		TRACE_ERR(r, "connect failed");
+		goto unlock;
+	}
 
 	r = ksock_set_nodelay(sock, true);
 	if (r) {
-		ksock_release(sock);
-		goto unlock;
+		TRACE_ERR(r, "set no delay failed");
+		goto release_sock;
+	}
+
+	mbedtls_ssl_set_bio(&con->ssl, con, vdisk_con_ssl_send,
+			    vdisk_con_ssl_recv, NULL);
+
+	r = mbedtls_ssl_handshake(&con->ssl);
+	if (r) {
+		TRACE_ERR(r, "ssl handshake failed");
+		r = -EIO;
+		goto release_sock;
 	}
 
 	con->ip = ip;
 	con->port = port;
 	con->sock = sock;
 	r = 0;
+	goto unlock;
+
+release_sock:
+	ksock_release(sock);
 unlock:
 	up_write(&con->rw_sem);
 	return r;
@@ -64,6 +150,7 @@ int vdisk_con_close(struct vdisk_connection *con)
 {
 	down_write(&con->rw_sem);
 	if (con->sock) {
+		mbedtls_ssl_close_notify(&con->ssl);
 		ksock_release(con->sock);
 		con->sock = NULL;
 		con->ip = 0;

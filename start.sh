@@ -2,8 +2,10 @@
 
 WDIR=temp
 
-make clean
+#make clean
 make
+sync
+sync
 insmod vdisk-mod.ko
 
 rm -rf $WDIR
