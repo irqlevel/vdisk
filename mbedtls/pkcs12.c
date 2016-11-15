@@ -37,7 +37,9 @@
 #include "mbedtls/asn1.h"
 #include "mbedtls/cipher.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_ARC4_C)
 #include "mbedtls/arc4.h"

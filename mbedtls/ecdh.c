@@ -36,7 +36,9 @@
 
 #include "mbedtls/ecdh.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 /*
  * Generate public key: simple wrapper around mbedtls_ecp_gen_keypair

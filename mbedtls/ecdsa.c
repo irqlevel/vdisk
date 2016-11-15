@@ -36,7 +36,9 @@
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/asn1write.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_ECDSA_DETERMINISTIC)
 #include "mbedtls/hmac_drbg.h"

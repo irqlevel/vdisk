@@ -34,7 +34,9 @@
 #include "mbedtls/md5.h"
 #include "mbedtls/cipher.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"

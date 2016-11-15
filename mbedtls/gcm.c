@@ -39,7 +39,9 @@
 
 #include "mbedtls/gcm.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_AESNI_C)
 #include "mbedtls/aesni.h"

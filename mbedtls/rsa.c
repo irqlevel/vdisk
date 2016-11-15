@@ -42,14 +42,18 @@
 #include "mbedtls/rsa.h"
 #include "mbedtls/oid.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_PKCS1_V21)
 #include "mbedtls/md.h"
 #endif
 
 #if defined(MBEDTLS_PKCS1_V15) && !defined(__OpenBSD__)
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stdlib.h>
+#endif
 #endif
 
 #if defined(MBEDTLS_PLATFORM_C)
@@ -1593,7 +1597,7 @@ static int myrand( void *rng_state, unsigned char *output, size_t len )
         rng_state  = NULL;
 
     for( i = 0; i < len; ++i )
-        output[i] = rand();
+        output[i] = mbedtls_rand();
 #else
     if( rng_state != NULL )
         rng_state = NULL;

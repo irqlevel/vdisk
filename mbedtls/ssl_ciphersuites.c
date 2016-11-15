@@ -38,7 +38,9 @@
 #include "mbedtls/ssl_ciphersuites.h"
 #include "mbedtls/ssl.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 /*
  * Ordered from most preferred to least preferred in terms of security.

@@ -9,6 +9,11 @@
 #include <linux/net.h>
 #include <linux/radix-tree.h>
 
+#include "mbedtls-helpers.h"
+#include "mbedtls/mbedtls/ssl.h"
+#include "mbedtls/mbedtls/entropy.h"
+#include "mbedtls/mbedtls/ctr_drbg.h"
+
 #define VDISK_DISK_NUMBER_MAX 256
 #define VDISK_SESSION_NUMBER_MAX 256
 #define VDISK_BLOCK_DEV_NAME "vdisk"
@@ -205,6 +210,11 @@ struct vdisk_connection {
 	struct vdisk_req_header discard_req_header;
 	struct vdisk_req_disk_discard discard_req;
 	struct vdisk_resp_disk_discard discard_resp;
+
+	mbedtls_ssl_context ssl;
+	mbedtls_entropy_context entropy;
+	mbedtls_ctr_drbg_context ctr_drbg;
+	mbedtls_ssl_config config;
 };
 
 struct vdisk_session {

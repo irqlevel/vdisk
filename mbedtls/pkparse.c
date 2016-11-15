@@ -31,7 +31,9 @@
 #include "mbedtls/asn1.h"
 #include "mbedtls/oid.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_RSA_C)
 #include "mbedtls/rsa.h"

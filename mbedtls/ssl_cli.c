@@ -39,9 +39,11 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/ssl_internal.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
 
 #include <stdint.h>
+#endif
 
 #if defined(MBEDTLS_HAVE_TIME)
 #include "mbedtls/platform_time.h"

@@ -34,8 +34,10 @@
 #include "mbedtls/cipher.h"
 #include "mbedtls/cipher_internal.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stdlib.h>
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_GCM_C)
 #include "mbedtls/gcm.h"

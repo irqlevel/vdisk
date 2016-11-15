@@ -41,8 +41,10 @@
 #include "mbedtls/asn1.h"
 #include "mbedtls/oid.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stdio.h>
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_PEM_PARSE_C)
 #include "mbedtls/pem.h"
@@ -67,7 +69,9 @@
 #if defined(_WIN32) && !defined(EFIX64) && !defined(EFI32)
 #include <windows.h>
 #else
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <time.h>
+#endif
 #endif
 
 #if defined(MBEDTLS_FS_IO)

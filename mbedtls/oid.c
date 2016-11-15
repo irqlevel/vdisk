@@ -32,8 +32,10 @@
 #include "mbedtls/oid.h"
 #include "mbedtls/rsa.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stdio.h>
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"

@@ -29,8 +29,10 @@
 #include MBEDTLS_CONFIG_FILE
 #endif
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 #define MBEDTLS_DES_ENCRYPT     1
 #define MBEDTLS_DES_DECRYPT     0

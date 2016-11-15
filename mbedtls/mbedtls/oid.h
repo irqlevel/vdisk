@@ -32,7 +32,9 @@
 #include "asn1.h"
 #include "pk.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stddef.h>
+#endif
 
 #if defined(MBEDTLS_CIPHER_C)
 #include "cipher.h"

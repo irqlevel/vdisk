@@ -46,8 +46,9 @@
 #include "mbedtls/bignum.h"
 #include "mbedtls/bn_mul.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
-
+#endif
 #if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"
 #else

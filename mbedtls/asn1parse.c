@@ -29,7 +29,9 @@
 
 #include "mbedtls/asn1.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_BIGNUM_C)
 #include "mbedtls/bignum.h"

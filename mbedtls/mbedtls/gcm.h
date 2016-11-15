@@ -25,7 +25,9 @@
 
 #include "cipher.h"
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <stdint.h>
+#endif
 
 #define MBEDTLS_GCM_ENCRYPT     1
 #define MBEDTLS_GCM_DECRYPT     0

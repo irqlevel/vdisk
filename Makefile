@@ -5,8 +5,22 @@ VDISK_MOD = vdisk-mod
 VDISK_MOD_KO = $(VDISK_MOD).ko
 
 vdisk-mod-y  += vdisk.o vdisk-sysfs.o vdisk-connection.o ksocket.o	\
-		vdisk-trace.o vdisk-cache.o vdisk-malloc-checker.o
-
+		vdisk-trace.o vdisk-cache.o vdisk-malloc-checker.o	\
+		mbedtls-helpers.o					\
+		mbedtls/aes.o mbedtls/rsa.o mbedtls/md.o mbedtls/sha1.o	\
+		mbedtls/sha512.o mbedtls/sha256.o mbedtls/dhm.o	\
+		mbedtls/ecp.o mbedtls/ecp_curves.o mbedtls/bignum.o	\
+		mbedtls/md5.o mbedtls/pem.o mbedtls/des.o	\
+		mbedtls/base64.o mbedtls/md_wrap.o mbedtls/ripemd160.o	\
+		mbedtls/asn1parse.o mbedtls/asn1write.o mbedtls/oid.o	\
+		mbedtls/ssl_cli.o mbedtls/ssl_tls.o mbedtls/x509.o	\
+		mbedtls/cipher.o mbedtls/cipher_wrap.o mbedtls/gcm.o	\
+		mbedtls/camellia.o mbedtls/blowfish.o mbedtls/arc4.o	\
+		mbedtls/pk.o mbedtls/ecdh.o mbedtls/ccm.o		\
+		mbedtls/ssl_ciphersuites.o mbedtls/x509_crt.o		\
+		mbedtls/pk_wrap.o mbedtls/ecdsa.o mbedtls/hmac_drbg.o	\
+		mbedtls/pkparse.o mbedtls/pkcs5.o mbedtls/pkcs12.o	\
+		mbedtls/entropy.o
 obj-m = $(VDISK_MOD).o
 
 KBUILD_EXTRA_SYMBOLS = $(KERNEL_BUILD_PATH)/Module.symvers

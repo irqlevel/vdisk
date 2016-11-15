@@ -42,7 +42,9 @@
 #define mbedtls_free       free
 #endif
 
+#if !defined(MBEDTLS_LINUX_KERNEL)
 #include <string.h>
+#endif
 
 #if defined(MBEDTLS_FS_IO)
 #include <stdio.h>
