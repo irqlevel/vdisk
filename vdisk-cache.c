@@ -151,7 +151,7 @@ static int __vdisk_cache_write(struct vdisk_cache *cache,
 	return r;
 }
 
-static bool vdisk_cache_overflow(struct vdisk *disk)
+static bool __vdisk_cache_overflow(struct vdisk *disk)
 {
 	if (disk->cache_limit &&
 	    (disk->cache_entries * VDISK_CACHE_SIZE) > disk->cache_limit)
@@ -159,39 +159,43 @@ static bool vdisk_cache_overflow(struct vdisk *disk)
 	return false;
 }
 
-static void vdisk_cache_evict(struct work_struct *work)
+static bool vdisk_cache_overflow(struct vdisk *disk)
 {
-	struct vdisk *disk;
-	struct vdisk_cache *batch[16];
-	struct vdisk_cache *curr, *tmp;
 	unsigned long irq_flags;
-	unsigned long index;
+	bool overflow;
+
+	read_lock_irqsave(&disk->cache_lock, irq_flags);
+	overflow = __vdisk_cache_overflow(disk);
+	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
+
+	return overflow;
+}
+
+static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
+{
+	struct vdisk_cache *batch[128];
+	struct vdisk_cache *curr, *tmp, *deleted;
+	unsigned long irq_flags;
 	struct list_head list;
 	int i, n, r;
 
-	disk = container_of(work, struct vdisk, cache_evict_work);
-
-	TRACE("disk 0x%p cache evicting", disk);
-
 	INIT_LIST_HEAD(&list);
-	index = 0;
 	write_lock_irqsave(&disk->cache_lock, irq_flags);
-	while (vdisk_cache_overflow(disk)) {
-		n = radix_tree_gang_lookup(&disk->cache_root,
-			(void **)batch, index, ARRAY_SIZE(batch));
-		if (!n)
-			break;
-		index = batch[n - 1]->index + 1;
+	n = radix_tree_gang_lookup(&disk->cache_root,
+		(void **)batch, *index, ARRAY_SIZE(batch));
+	if (n) {
+		*index = batch[n - 1]->index + 1;
 		for (i = 0; i < n; i++) {
 			curr = batch[i];
 			if (atomic_read(&curr->pin_count) == 0) {
-				tmp = __vdisk_cache_delete(disk, curr->index);
-				WARN_ON(tmp != curr);
+				vdisk_cache_get(curr);
 				list_add_tail(&curr->list, &list);
 			}
 		}
 	}
 	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+	if (!n)
+		return -ENOTTY;
 
 	list_for_each_entry_safe(curr, tmp, &list, list) {
 		down_write(&curr->rw_sem);
@@ -200,16 +204,53 @@ static void vdisk_cache_evict(struct work_struct *work)
 			if (r)
 				TRACE_ERR(r, "can't write cache %llu r %d",
 					  curr->index, r);
+			curr->dirty = false;
 		}
 		up_write(&curr->rw_sem);
+	}
 
+	write_lock_irqsave(&disk->cache_lock, irq_flags);
+	list_for_each_entry_safe(curr, tmp, &list, list) {
+		if (__vdisk_cache_overflow(disk) &&
+		    atomic_read(&curr->pin_count) == 0 && !curr->dirty) {
+			deleted = __vdisk_cache_delete(disk, curr->index);
+			if (!WARN_ON(deleted != curr))
+				vdisk_cache_put(curr, false);
+		}
 		list_del_init(&curr->list);
 		vdisk_cache_put(curr, false);
 	}
+	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+	return 0;
+}
+
+static void vdisk_cache_evict(struct vdisk *disk)
+{
+	unsigned long index;
+	int i, r;
+
+	TRACE("disk 0x%p cache evicting", disk);
+
+	index = 0;
+	for (i = 0; i < 20; i++) {
+		if (!vdisk_cache_overflow(disk))
+			break;
+
+		r = __vdisk_cache_evict(disk, &index);
+		if (!r)
+			break;
+	}
 
 	atomic_set(&disk->cache_evicting, 0);
-
 	TRACE("disk 0x%p cache evicted", disk);
+}
+
+static void vdisk_cache_evict_worker(struct work_struct *work)
+{
+	struct vdisk *disk;
+
+	disk = container_of(work, struct vdisk, cache_evict_work);
+	vdisk_cache_evict(disk);
 }
 
 void vdisk_cache_deinit(struct vdisk *disk)
@@ -218,6 +259,8 @@ void vdisk_cache_deinit(struct vdisk *disk)
 	struct vdisk_cache *curr, *tmp;
 	unsigned long irq_flags;
 	int i, n, r;
+
+	hrtimer_cancel(&disk->cache_timer);
 
 	drain_workqueue(disk->cache_wq);
 	destroy_workqueue(disk->cache_wq);
@@ -242,7 +285,7 @@ void vdisk_cache_deinit(struct vdisk *disk)
 			down_write(&curr->rw_sem);
 			if (curr->dirty) {
 				r = __vdisk_cache_write(curr,
-					&disk->session->con, WRITE_FLUSH_FUA);
+					&disk->session->con, 0);
 				if (!r)
 					curr->dirty = false;
 				else
@@ -361,17 +404,15 @@ unlock:
 	return r;
 }
 
-static void vdisk_cache_trim(struct vdisk *disk)
+static void vdisk_cache_trim(struct vdisk *disk, bool async)
 {
-	unsigned long irq_flags;
-	bool overflow;
-
-	read_lock_irqsave(&disk->cache_lock, irq_flags);
-	overflow = vdisk_cache_overflow(disk);
-	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
-
-	if (overflow && atomic_cmpxchg(&disk->cache_evicting, 0, 1) == 0)
-		queue_work(disk->cache_wq, &disk->cache_evict_work);
+	if (vdisk_cache_overflow(disk) &&
+	    atomic_cmpxchg(&disk->cache_evicting, 0, 1) == 0) {
+		if (async)
+			queue_work(disk->cache_wq, &disk->cache_evict_work);
+		else
+			vdisk_cache_evict(disk);
+	}
 }
 
 int vdisk_cache_copy_from(struct vdisk_queue *queue, void *buf, u64 off,
@@ -421,7 +462,7 @@ int vdisk_cache_copy_from(struct vdisk_queue *queue, void *buf, u64 off,
 out:
 	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d",
 	      disk, off, len, rw, r);
-	vdisk_cache_trim(disk);
+	vdisk_cache_trim(disk, false);
 	return r;
 }
 
@@ -474,22 +515,47 @@ int vdisk_cache_copy_to(struct vdisk_queue *queue, void *buf, u64 off,
 out:
 	TRACE("disk 0x%p off %llu len %u rw 0x%x r %d",
 	      disk, off, len, rw, r);
-	vdisk_cache_trim(disk);
+	vdisk_cache_trim(disk, false);
 	return r;
+}
+
+static enum hrtimer_restart vdisk_cache_timer_callback(struct hrtimer *timer)
+{
+	struct vdisk *disk;
+
+	disk = container_of(timer, struct vdisk, cache_timer);
+
+	TRACE("disk 0x%p cache timer", disk);
+
+	vdisk_cache_trim(disk, true);
+
+	hrtimer_start(&disk->cache_timer,
+		      ktime_add_ms(ktime_get(), VDISK_CACHE_TIMER_PERIOD_MS),
+		      HRTIMER_MODE_ABS);
+
+	return HRTIMER_NORESTART;
 }
 
 int vdisk_cache_init(struct vdisk *disk)
 {
 	INIT_RADIX_TREE(&disk->cache_root, GFP_NOIO);
-	INIT_WORK(&disk->cache_evict_work, vdisk_cache_evict);
+	INIT_WORK(&disk->cache_evict_work, vdisk_cache_evict_worker);
 
 	disk->cache_limit = 1024 * 1024;
+
+	hrtimer_init(&disk->cache_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	disk->cache_timer.function = vdisk_cache_timer_callback;
 
 	atomic_set(&disk->cache_evicting, 0);
 	disk->cache_wq = alloc_workqueue("vdisk-cache-wq",
 					WQ_MEM_RECLAIM, 0);
 	if (!disk->cache_wq)
 		return -ENOMEM;
+
+	hrtimer_start(&disk->cache_timer,
+		      ktime_add_ms(ktime_get(), VDISK_CACHE_TIMER_PERIOD_MS),
+		      HRTIMER_MODE_ABS);
+
 	return 0;
 }
 
@@ -501,5 +567,5 @@ void vdisk_cache_set_limit(struct vdisk *disk, u64 limit)
 	disk->cache_limit = limit;
 	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
 
-	vdisk_cache_trim(disk);
+	vdisk_cache_trim(disk, false);
 }

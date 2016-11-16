@@ -8,6 +8,7 @@
 #include <linux/zlib.h>
 #include <linux/net.h>
 #include <linux/radix-tree.h>
+#include <linux/hrtimer.h>
 
 #include "mbedtls-helpers.h"
 #include "mbedtls/mbedtls/ssl.h"
@@ -41,10 +42,16 @@
 #define VDISK_ID_SIZE		256
 #define VDISK_ID_SCANF_FMT	"%255s"
 
-#define VDISK_CACHE_PAGES	4
+/*
+ * Define disk cache entry size.
+ * Should be smaller than 16KB to not exceed TLS record max size.
+ */
+#define VDISK_CACHE_PAGES	2
 #define VDISK_CACHE_SIZE	(VDISK_CACHE_PAGES * PAGE_SIZE)
 
 #define VDISK_QUEUE_MAX		2
+
+#define VDISK_CACHE_TIMER_PERIOD_MS 20
 
 struct vdisk_kobject_holder {
 	struct kobject kobj;
@@ -267,6 +274,7 @@ struct vdisk {
 	struct work_struct cache_evict_work;
 	struct workqueue_struct *cache_wq;
 	atomic_t cache_evicting;
+	struct hrtimer cache_timer;
 };
 
 struct vdisk_cache {

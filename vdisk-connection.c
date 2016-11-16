@@ -103,6 +103,8 @@ static int __vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
 	if (r)
 		return r;
 
+	TRACE("sent len %d wrote %d r %d", len, wrote, r);
+
 	return wrote;
 }
 
@@ -115,6 +117,8 @@ static int __vdisk_con_ssl_recv(void *ctx, unsigned char *buf, size_t len)
 	r = ksock_read(con->sock, buf, len, &read);
 	if (r)
 		return r;
+
+	TRACE("recv len %d read %d r %d", len, read, r);
 
 	return read;
 }
