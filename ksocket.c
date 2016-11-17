@@ -230,7 +230,7 @@ int ksock_write_timeout(struct socket *sock, void *buffer, u32 nob,
 		}
 
 		if (ticks == 0) {
-			error = -EAGAIN;
+			error = -ETIME;
 			goto out;
 		}
 	}
@@ -331,7 +331,7 @@ int ksock_read(struct socket *sock, void *buffer, u32 nob, u32 *pread)
 
 	while (off < nob) {
 		err = ksock_read_timeout(sock, (char *)buffer + off,
-				nob - off, 5 * HZ, &read);
+				nob - off, 60 * HZ, &read);
 		off += read;
 		if (err)
 			break;
@@ -348,7 +348,7 @@ int ksock_write(struct socket *sock, void *buffer, u32 nob, u32 *pwrote)
 
 	while (off < nob) {
 		err = ksock_write_timeout(sock, (char *)buffer + off,
-				nob - off, 5 * HZ, &wrote);
+				nob - off, 60 * HZ, &wrote);
 		off += wrote;
 		if (err)
 			break;

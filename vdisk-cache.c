@@ -537,6 +537,8 @@ int vdisk_cache_init(struct vdisk *disk)
 	INIT_RADIX_TREE(&disk->cache_root, GFP_NOIO);
 	INIT_WORK(&disk->cache_evict_work, vdisk_cache_evict_worker);
 
+	rwlock_init(&disk->cache_lock);
+
 	disk->cache_limit = 1024 * 1024;
 
 	hrtimer_init(&disk->cache_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);

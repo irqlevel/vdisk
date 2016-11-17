@@ -257,7 +257,6 @@ struct vdisk {
 	struct request_queue *req_queue;
 	struct gendisk *gdisk;
 	struct list_head list;
-	rwlock_t lock;
 	struct vdisk_queue queue[VDISK_QUEUE_MAX];
 	struct vdisk_kobject_holder kobj_holder;
 	u64 bps[2];
@@ -269,7 +268,6 @@ struct vdisk {
 	u64 entropy[2];
 	u64 size;
 	u64 disk_id;
-	bool releasing;
 	char disk_handle[VDISK_ID_SIZE];
 
 	rwlock_t cache_lock;
