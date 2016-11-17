@@ -14,6 +14,7 @@
 #include "mbedtls/mbedtls/ssl.h"
 #include "mbedtls/mbedtls/entropy.h"
 #include "mbedtls/mbedtls/ctr_drbg.h"
+#include "mbedtls/mbedtls/aes.h"
 
 #define VDISK_DISK_NUMBER_MAX 256
 #define VDISK_SESSION_NUMBER_MAX 256
@@ -163,6 +164,7 @@ struct vdisk_req_disk_read {
 
 struct vdisk_resp_disk_read {
 	char data[VDISK_CACHE_SIZE];
+	unsigned char iv[16];
 };
 
 struct vdisk_req_disk_write {
@@ -173,6 +175,7 @@ struct vdisk_req_disk_write {
 	__le32 size;
 	__le32 flags;
 	char data[VDISK_CACHE_SIZE];
+	unsigned char iv[16];
 };
 
 struct vdisk_resp_disk_write {
@@ -217,6 +220,8 @@ struct vdisk_connection {
 	struct vdisk_req_header discard_req_header;
 	struct vdisk_req_disk_discard discard_req;
 	struct vdisk_resp_disk_discard discard_resp;
+
+	unsigned char key[32];
 
 	mbedtls_ssl_context ssl;
 	mbedtls_ssl_config ssl_conf;
@@ -275,6 +280,8 @@ struct vdisk {
 	struct workqueue_struct *cache_wq;
 	atomic_t cache_evicting;
 	struct hrtimer cache_timer;
+
+	unsigned char key[32];
 };
 
 struct vdisk_cache {
@@ -303,10 +310,10 @@ void vdisk_disk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len);
 void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len);
 
 int vdisk_session_create_disk(struct vdisk_session *session,
-			      int number, u64 size);
+			      int number, u64 size, unsigned char key[32]);
 
 int vdisk_session_open_disk(struct vdisk_session *session, int number,
-			    u64 disk_id);
+			    u64 disk_id, unsigned char key[32]);
 
 int vdisk_session_close_disk(struct vdisk_session *session, int number);
 
@@ -324,6 +331,12 @@ int vdisk_session_logout(struct vdisk_session *session);
 int vdisk_global_create_session(struct vdisk_global *glob, int number);
 
 int vdisk_global_delete_session(struct vdisk_global *glob, int number);
+
+int vdisk_encrypt(struct vdisk *disk, void *input,
+		  u32 len, void *output, void *iv, u32 iv_len);
+
+int vdisk_decrypt(struct vdisk *disk, void *input,
+		  u32 len, void *output, void *iv, u32 iv_len);
 
 void *vdisk_kzalloc(size_t size, gfp_t flags);
 

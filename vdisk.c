@@ -437,7 +437,7 @@ deinit_con:
 
 static int vdisk_session_start_disk(struct vdisk_session *session,
 				    int number, u64 size, u64 disk_id,
-				    char *disk_handle)
+				    char *disk_handle, unsigned char key[32])
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
@@ -447,6 +447,8 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	if (number < 0 || number >= VDISK_DISK_NUMBER_MAX)
 		return -EINVAL;
 	if (size & 511 || (size % VDISK_CACHE_SIZE) != 0)
+		return -EINVAL;
+	if (ARRAY_SIZE(disk->key) != 32)
 		return -EINVAL;
 
 	TRACE("creating disk %d", number);
@@ -463,6 +465,8 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	disk->number = number;
 	disk->size = size;
 	disk->disk_id = disk_id;
+	memcpy(disk->key, key, sizeof(disk->key));
+
 	snprintf(disk->disk_handle, ARRAY_SIZE(disk->disk_handle),
 		"%s", disk_handle);
 
@@ -546,15 +550,17 @@ free_number:
 }
 
 int vdisk_session_create_disk(struct vdisk_session *session,
-			      int number, u64 size)
+			      int number, u64 size, unsigned char key[32])
 {
 	u64 disk_id;
 	char *disk_handle;
 	int r;
 
 	r = vdisk_con_create_disk(&session->con, size, &disk_id);
-	if (r)
+	if (r) {
+		TRACE_ERR(r, "create disk failed");
 		return r;
+	}
 
 	TRACE("disk disk_id %llu size %llu created", disk_id, size);
 
@@ -567,7 +573,7 @@ int vdisk_session_create_disk(struct vdisk_session *session,
 	TRACE("disk %llu open r %d", disk_id, r);
 
 	r = vdisk_session_start_disk(session, number, size, disk_id,
-					disk_handle);
+				     disk_handle, key);
 	if (r) {
 		TRACE_ERR(r, "can't start disk");
 		goto close_disk;
@@ -611,7 +617,7 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 }
 
 int vdisk_session_open_disk(struct vdisk_session *session, int number,
-			    u64 disk_id)
+			    u64 disk_id, unsigned char key[32])
 {
 	int r;
 	char *disk_handle;
@@ -626,7 +632,7 @@ int vdisk_session_open_disk(struct vdisk_session *session, int number,
 	TRACE("session 0x%p open disk %llu r %d", session, disk_id, r);
 
 	r = vdisk_session_start_disk(session, number, size,
-				     disk_id, disk_handle);
+				     disk_id, disk_handle, key);
 	if (r) {
 		TRACE_ERR(r, "can't start disk");
 		goto close_disk;
@@ -758,6 +764,58 @@ int vdisk_global_delete_session(struct vdisk_global *glob, int number)
 		}
 	}
 	up_write(&glob->rw_sem);
+
+	return r;
+}
+
+int vdisk_encrypt(struct vdisk *disk, void *input,
+		  u32 len, void *output, void *iv, u32 iv_len)
+{
+	mbedtls_aes_context aes;
+	unsigned char local_iv[16];
+	int r;
+
+	if (iv_len != sizeof(local_iv))
+		return -EINVAL;
+
+	mbedtls_aes_init(&aes);
+	r = mbedtls_aes_setkey_enc(&aes, disk->key, sizeof(disk->key) * 8);
+	if (r)
+		return r;
+
+	get_random_bytes(&local_iv, sizeof(local_iv));
+
+	memcpy(iv, local_iv, sizeof(local_iv));
+
+	r = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, len,
+				  local_iv, input, output);
+
+	mbedtls_aes_free(&aes);
+
+	return r;
+}
+
+int vdisk_decrypt(struct vdisk *disk, void *input,
+		  u32 len, void *output, void *iv, u32 iv_len)
+{
+	mbedtls_aes_context aes;
+	unsigned char local_iv[16];
+	int r;
+
+	if (iv_len != sizeof(local_iv))
+		return -EINVAL;
+
+	memcpy(local_iv, iv, sizeof(local_iv));
+
+	mbedtls_aes_init(&aes);
+	r = mbedtls_aes_setkey_dec(&aes, disk->key, sizeof(disk->key) * 8);
+	if (r)
+		return r;
+
+	r = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, len,
+				  local_iv, input, output);
+
+	mbedtls_aes_free(&aes);
 
 	return r;
 }

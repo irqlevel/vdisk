@@ -17,4 +17,6 @@ do {							\
 			      __func__, ##__VA_ARGS__);	\
 } while (false)
 
+#define TRACE_VERBOSE(fmt, ...)
+
 #endif

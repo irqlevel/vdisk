@@ -103,7 +103,7 @@ static int __vdisk_con_ssl_send(void *ctx, const unsigned char *buf, size_t len)
 	if (r)
 		return r;
 
-	TRACE("sent len %d wrote %d r %d", len, wrote, r);
+	TRACE_VERBOSE("sent len %d wrote %d r %d", len, wrote, r);
 
 	return wrote;
 }
@@ -118,7 +118,7 @@ static int __vdisk_con_ssl_recv(void *ctx, unsigned char *buf, size_t len)
 	if (r)
 		return r;
 
-	TRACE("recv len %d read %d r %d", len, read, r);
+	TRACE_VERBOSE("recv len %d read %d r %d", len, read, r);
 
 	return read;
 }
@@ -657,8 +657,8 @@ unlock:
 	return r;
 }
 
-int vdisk_con_copy_from(struct vdisk_connection *con, u64 disk_id,
-			char *disk_handle, void *buf, u64 off, u32 len,
+int vdisk_con_copy_from(struct vdisk_connection *con, struct vdisk *disk,
+			void *buf, u64 off, u32 len,
 			unsigned long rw)
 {
 	struct vdisk_req_header *req_header = &con->read_req_header;
@@ -678,8 +678,8 @@ int vdisk_con_copy_from(struct vdisk_connection *con, u64 disk_id,
 	snprintf(req->session_id, ARRAY_SIZE(req->session_id), "%s",
 		 con->session_id);
 	snprintf(req->disk_handle, ARRAY_SIZE(req->disk_handle), "%s",
-		 disk_handle);
-	req->disk_id = cpu_to_le64(disk_id);
+		 disk->disk_handle);
+	req->disk_id = cpu_to_le64(disk->disk_id);
 	req->offset = cpu_to_le64(off);
 	req->size = cpu_to_le32(len);
 	req->flags = cpu_to_le32(vdisk_io_flags_by_rw(rw));
@@ -693,14 +693,20 @@ int vdisk_con_copy_from(struct vdisk_connection *con, u64 disk_id,
 			      sizeof(*resp), resp);
 	if (r)
 		goto unlock;
-	memcpy(buf, resp->data, len);
+
+	r = vdisk_decrypt(disk, resp->data, len, buf, resp->iv,
+			  sizeof(resp->iv));
+
+	TRACE_VERBOSE("decrypt buf %4phN data %4phN iv %4phN off %llu",
+		buf, resp->data, resp->iv, off);
+
 unlock:
 	up_write(&con->rw_sem);
 	return r;
 }
 
-int vdisk_con_copy_to(struct vdisk_connection *con, u64 disk_id,
-		      char *disk_handle, void *buf, u64 off, u32 len,
+int vdisk_con_copy_to(struct vdisk_connection *con, struct vdisk *disk,
+		      void *buf, u64 off, u32 len,
 		      unsigned long rw)
 {
 	struct vdisk_req_header *req_header = &con->write_req_header;
@@ -720,13 +726,19 @@ int vdisk_con_copy_to(struct vdisk_connection *con, u64 disk_id,
 	snprintf(req->session_id, ARRAY_SIZE(req->session_id), "%s",
 		 con->session_id);
 	snprintf(req->disk_handle, ARRAY_SIZE(req->disk_handle), "%s",
-		 disk_handle);
-	req->disk_id = cpu_to_le64(disk_id);
+		 disk->disk_handle);
+	req->disk_id = cpu_to_le64(disk->disk_id);
 	req->offset = cpu_to_le64(off);
 	req->size = cpu_to_le32(len);
 	req->flags = cpu_to_le32(vdisk_io_flags_by_rw(rw));
 
-	memcpy(req->data, buf, len);
+	r = vdisk_encrypt(disk, buf, len, req->data, req->iv,
+			  sizeof(req->iv));
+	if (r)
+		goto unlock;
+
+	TRACE_VERBOSE("encrypt buf %4phN data %4phN iv %4phN off %llu",
+		buf, req->data, req->iv, off);
 
 	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_WRITE,
 			     sizeof(*req_header) + sizeof(*req), req_header);
@@ -743,8 +755,8 @@ unlock:
 	return r;
 }
 
-int vdisk_con_discard(struct vdisk_connection *con, u64 disk_id,
-		      char *disk_handle, u64 off, u32 len)
+int vdisk_con_discard(struct vdisk_connection *con, struct vdisk *disk,
+		      u64 off, u32 len)
 {
 	struct vdisk_req_header *req_header = &con->discard_req_header;
 	struct vdisk_req_disk_discard *req = &con->discard_req;
@@ -760,8 +772,8 @@ int vdisk_con_discard(struct vdisk_connection *con, u64 disk_id,
 	snprintf(req->session_id, ARRAY_SIZE(req->session_id), "%s",
 		 con->session_id);
 	snprintf(req->disk_handle, ARRAY_SIZE(req->disk_handle), "%s",
-		 disk_handle);
-	req->disk_id = cpu_to_le64(disk_id);
+		 disk->disk_handle);
+	req->disk_id = cpu_to_le64(disk->disk_id);
 	req->offset = cpu_to_le64(off);
 	req->size = cpu_to_le32(len);
 

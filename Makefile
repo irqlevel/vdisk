@@ -6,6 +6,7 @@ VDISK_MOD_KO = $(VDISK_MOD).ko
 
 vdisk-mod-y  += vdisk.o vdisk-sysfs.o vdisk-connection.o ksocket.o	\
 		vdisk-trace.o vdisk-cache.o vdisk-malloc-checker.o	\
+		vdisk-helpers.o						\
 		mbedtls-helpers.o					\
 		mbedtls/aes.o mbedtls/rsa.o mbedtls/md.o mbedtls/sha1.o	\
 		mbedtls/sha512.o mbedtls/sha256.o mbedtls/dhm.o	\

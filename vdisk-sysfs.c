@@ -1,5 +1,6 @@
 #include "vdisk-sysfs.h"
 #include "vdisk-cache.h"
+#include "vdisk-helpers.h"
 
 #define VDISK_DISK_ATTR_RO(_name) \
 struct vdisk_disk_sysfs_attr vdisk_disk_attr_##_name = \
@@ -223,15 +224,23 @@ static ssize_t vdisk_disk_attr_cache_usage_show(struct vdisk *disk, char *buf)
 static ssize_t vdisk_session_attr_create_disk_store(struct vdisk_session *sess,
 						const char *buf, size_t count)
 {
+	char key_buf[VDISK_ID_SIZE];
+	unsigned char key[32];
 	u64 size;
 	int number;
 	int r;
 
-	r = sscanf(buf, "%d %llu", &number, &size);
-	if (r < 2)
+	r = sscanf(buf, "%d %llu "VDISK_ID_SCANF_FMT, &number, &size, key_buf);
+	if (r < 3)
 		return -EINVAL;
 
-	r = vdisk_session_create_disk(sess, number, size);
+	key_buf[VDISK_ID_SIZE - 1] = '\0';
+
+	r = vdisk_hex_to_bytes(key_buf, strlen(key_buf), key, ARRAY_SIZE(key));
+	if (r)
+		return r;
+
+	r = vdisk_session_create_disk(sess, number, size, key);
 	if (r)
 		return r;
 
@@ -248,15 +257,24 @@ static ssize_t vdisk_session_attr_create_disk_show(struct vdisk_session *sess,
 static ssize_t vdisk_session_attr_open_disk_store(struct vdisk_session *sess,
 						  const char *buf, size_t count)
 {
+	char key_buf[VDISK_ID_SIZE];
+	unsigned char key[32];
 	u64 disk_number;
 	int number;
 	int r;
 
-	r = sscanf(buf, "%d %llu", &number, &disk_number);
-	if (r < 2)
+	r = sscanf(buf, "%d %llu "VDISK_ID_SCANF_FMT, &number,
+		   &disk_number, key_buf);
+	if (r < 3)
 		return -EINVAL;
 
-	r = vdisk_session_open_disk(sess, number, disk_number);
+	key_buf[VDISK_ID_SIZE - 1] = '\0';
+
+	r = vdisk_hex_to_bytes(key_buf, strlen(key_buf), key, ARRAY_SIZE(key));
+	if (r)
+		return r;
+
+	r = vdisk_session_open_disk(sess, number, disk_number, key);
 	if (r)
 		return r;
 

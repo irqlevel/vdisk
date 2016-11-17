@@ -2,35 +2,20 @@
 #define __VDISK_HELPERS_H__
 
 #include <linux/version.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/module.h>
 
-static inline unsigned long hash_pointer(void *ptr)
-{
-	unsigned long val = (unsigned long)ptr;
-	unsigned long hash, i, c;
+unsigned long vdisk_hash_pointer(void *ptr);
 
-	hash = 5381;
-	val = val >> 3;
-	for (i = 0; i < sizeof(val); i++) {
-		c = (unsigned char)val & 0xFF;
-		hash = ((hash << 5) + hash) + c;
-		val = val >> 8;
-	}
-
-	return hash;
-}
-
-static inline const char *truncate_file_name(const char *file_name)
-{
-	char *base;
-
-	base = strrchr(file_name, '/');
-	if (base)
-		return ++base;
-	else
-		return file_name;
-}
+const char *vdisk_truncate_file_name(const char *file_name);
 
 #define PRINTK(fmt, ...)    \
 	pr_info("vdisk: " fmt, ##__VA_ARGS__)
+
+int vdisk_hex_to_byte(unsigned char c);
+
+int vdisk_hex_to_bytes(char *hex, int hex_len, unsigned char *dst,
+		       int dst_len);
 
 #endif
