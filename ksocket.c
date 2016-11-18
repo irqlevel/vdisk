@@ -1,9 +1,15 @@
 #include "ksocket.h"
 #include <linux/version.h>
-#include <linux/in.h>
 #include <net/sock.h>
 #include <linux/uaccess.h>
 #include <linux/tcp.h>
+#include <linux/dns_resolver.h>
+#include <linux/inet.h>
+#include <linux/net.h>
+#include <linux/in.h>
+#include <linux/in6.h>
+
+#include "vdisk-trace-helpers.h"
 
 u16 ksock_peer_port(struct socket *sock)
 {
@@ -423,4 +429,99 @@ int ksock_ioctl(struct socket *sock, int cmd, unsigned long arg)
 	err = sock->ops->ioctl(sock, cmd, arg);
 	set_fs(oldfs);
 	return err;
+}
+
+static void ksock_addr_set_port(struct sockaddr_storage *ss, int p)
+{
+	switch (ss->ss_family) {
+	case AF_INET:
+		((struct sockaddr_in *)ss)->sin_port = htons(p);
+			break;
+	case AF_INET6:
+		((struct sockaddr_in6 *)ss)->sin6_port = htons(p);
+			break;
+	}
+}
+
+static int ksock_pton(char *ip, int ip_len, struct sockaddr_storage *ss)
+{
+	struct sockaddr_in *in4 = (struct sockaddr_in *) ss;
+	struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) ss;
+
+	memset(ss, 0, sizeof(*ss));
+
+	if (in4_pton(ip, ip_len, (u8 *)&in4->sin_addr.s_addr, -1, NULL)) {
+		ss->ss_family = AF_INET;
+		return 0;
+	}
+
+	if (in6_pton(ip, ip_len, (u8 *)&in6->sin6_addr.s6_addr, -1, NULL)) {
+		ss->ss_family = AF_INET6;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int ksock_dns_resolve(char *name, struct sockaddr_storage *ss)
+{
+	int ip_len, r;
+	char *ip_addr = NULL;
+
+	ip_len = dns_query(NULL, name, strlen(name), NULL, &ip_addr, NULL);
+	if (ip_len > 0)
+		r = ksock_pton(ip_addr, ip_len, ss);
+	else
+		r = -ESRCH;
+	kfree(ip_addr);
+	return r;
+}
+
+int ksock_connect_host(struct socket **sockp, char *host, u16 port)
+{
+	struct sockaddr_storage addr;
+	struct sockaddr_in *in4 = (struct sockaddr_in *)&addr;
+	struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&addr;
+	int r;
+	struct socket *sock;
+	int option;
+	mm_segment_t oldmm;
+
+	r = ksock_pton(host, strlen(host), &addr);
+	if (r) {
+		r = ksock_dns_resolve(host, &addr);
+		if (r)
+			return r;
+	}
+
+	r = sock_create(addr.ss_family, SOCK_STREAM, 0, &sock);
+	if (r)
+		return r;
+
+	oldmm = get_fs();
+	set_fs(KERNEL_DS);
+	option = 1;
+	r = sock_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+		(char *)&option, sizeof(option));
+	set_fs(oldmm);
+	if (r)
+		goto release_sock;
+
+	r = ksock_set_nodelay(sock, true);
+	if (r)
+		goto release_sock;
+
+	ksock_addr_set_port(&addr, port);
+
+	r = sock->ops->connect(sock, (struct sockaddr *)&addr,
+		(addr.ss_family == AF_INET) ? sizeof(*in4) : sizeof(*in6), 0);
+	if (r)
+		goto release_sock;
+
+	*sockp = sock;
+	return 0;
+
+release_sock:
+	sock_release(sock);
+	return r;
 }

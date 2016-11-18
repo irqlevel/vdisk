@@ -6,6 +6,7 @@ WDIR=temp
 make
 sync
 sync
+modprobe dns-resolver
 insmod vdisk-mod.ko
 
 rm -rf $WDIR

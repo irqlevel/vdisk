@@ -49,16 +49,16 @@ void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len)
 	disk->limit_bps[1] = limit_bps[1];
 }
 
-int vdisk_session_connect(struct vdisk_session *session, u32 ip, u16 port)
+int vdisk_session_connect(struct vdisk_session *session, char *host, u16 port)
 {
 	int r;
 
-	TRACE("session 0x%p connecting ip 0x%x port %u", session, ip, port);
+	TRACE("session 0x%p connecting host %s port %u", session, host, port);
 
-	r = vdisk_con_connect(&session->con, ip, port);
+	r = vdisk_con_connect(&session->con, host, port);
 
-	TRACE("session 0x%p connect ip 0x%x port %u, r %d",
-	      session, ip, port, r);
+	TRACE("session 0x%p connect host %s port %u, r %d",
+	      session, host, port, r);
 
 	return r;
 }
@@ -405,7 +405,7 @@ static int vdisk_queue_init(struct vdisk *disk, int index)
 	if (r)
 		return r;
 
-	r = vdisk_con_connect(&queue->con, disk->session->con.ip,
+	r = vdisk_con_connect(&queue->con, disk->session->con.host,
 			      disk->session->con.port);
 	if (r)
 		goto deinit_con;

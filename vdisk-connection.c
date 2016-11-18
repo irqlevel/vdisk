@@ -71,6 +71,8 @@ static struct vdisk_req_header *vdisk_req_create(u32 type, u32 len)
 
 int vdisk_con_init(struct vdisk_connection *con)
 {
+	TRACE("con 0x%p init", con);
+
 	memset(con, 0, sizeof(*con));
 	init_rwsem(&con->rw_sem);
 
@@ -84,6 +86,15 @@ int vdisk_con_init(struct vdisk_connection *con)
 
 void vdisk_con_deinit(struct vdisk_connection *con)
 {
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(con->guard); i++) {
+		if (con->guard[i] != 0) {
+			TRACE_ERR(-EINVAL, "con 0x%p guard[%d]=0x%lx",
+				  con, con->guard[i]);
+		}
+	}
+
 	vdisk_con_close(con);
 
 	mbedtls_x509_crt_free(&con->ssl_ca);
@@ -165,7 +176,7 @@ static int vdisk_ssl_read(struct vdisk_connection *con, unsigned char *buf,
 	return read;
 }
 
-int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
+int vdisk_con_connect(struct vdisk_connection *con, char *host, u16 port)
 {
 	int r;
 	struct socket *sock;
@@ -217,7 +228,7 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 		goto unlock;
 	}
 
-	r = ksock_connect(&sock, 0, 0, ip, port);
+	r = ksock_connect_host(&sock, host, port);
 	if (r) {
 		TRACE_ERR(r, "connect failed");
 		goto unlock;
@@ -229,7 +240,7 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 		goto release_sock;
 	}
 
-	con->ip = ip;
+	snprintf(con->host, ARRAY_SIZE(con->host), "%s", host);
 	con->port = port;
 	con->sock = sock;
 
@@ -248,7 +259,7 @@ int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port)
 
 reset_con:
 	con->sock = NULL;
-	con->ip = 0;
+	con->host[0] = '\0';
 	con->port = 0;
 release_sock:
 	ksock_release(sock);
@@ -264,7 +275,7 @@ int vdisk_con_close(struct vdisk_connection *con)
 		mbedtls_ssl_close_notify(&con->ssl);
 		ksock_release(con->sock);
 		con->sock = NULL;
-		con->ip = 0;
+		con->host[0] = '\0';
 		con->port = 0;
 	}
 	up_write(&con->rw_sem);
@@ -683,6 +694,9 @@ int vdisk_con_copy_from(struct vdisk_connection *con, struct vdisk *disk,
 	req->offset = cpu_to_le64(off);
 	req->size = cpu_to_le32(len);
 	req->flags = cpu_to_le32(vdisk_io_flags_by_rw(rw));
+
+	TRACE("req disk_id %llu off %llu size %u flags %u",
+	      req->disk_id, req->offset, req->size, req->flags);
 
 	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_READ,
 			     sizeof(*req_header) + sizeof(*req), req_header);

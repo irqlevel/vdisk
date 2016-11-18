@@ -204,10 +204,6 @@ struct vdisk_connection {
 	struct socket *sock;
 	char session_id[VDISK_ID_SIZE];
 	char disk_handle[VDISK_ID_SIZE];
-	char user_name[VDISK_ID_SIZE];
-
-	u32 ip;
-	u16 port;
 
 	struct vdisk_req_header read_req_header;
 	struct vdisk_req_disk_read read_req;
@@ -228,6 +224,11 @@ struct vdisk_connection {
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
 	mbedtls_x509_crt ssl_ca;
+
+	u16 port;
+	char host[VDISK_ID_SIZE];
+
+	long guard[4];
 };
 
 struct vdisk_session {
@@ -317,7 +318,7 @@ int vdisk_session_close_disk(struct vdisk_session *session, int number);
 
 int vdisk_session_delete_disk(struct vdisk_session *session, int number);
 
-int vdisk_session_connect(struct vdisk_session *session, u32 ip, u16 port);
+int vdisk_session_connect(struct vdisk_session *session, char *host, u16 port);
 
 int vdisk_session_disconnect(struct vdisk_session *session);
 

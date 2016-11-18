@@ -339,27 +339,19 @@ static ssize_t vdisk_session_attr_delete_disk_show(struct vdisk_session *sess,
 static ssize_t vdisk_session_attr_connect_store(struct vdisk_session *session,
 						const char *buf, size_t count)
 {
-	unsigned int ip_part[4], port, ip;
+	char host[VDISK_ID_SIZE];
+	unsigned int port;
 	int r;
-	int i;
 
-	r = sscanf(buf, "%u.%u.%u.%u:%u",
-		   &ip_part[3], &ip_part[2], &ip_part[1], &ip_part[0], &port);
-	if (r < 5)
+	r = sscanf(buf, VDISK_ID_SCANF_FMT" %u", host, &port);
+	if (r < 2)
 		return -EINVAL;
 
 	if (port > 65535)
 		return -EINVAL;
 
-	ip = 0;
-	for (i = 0; i < ARRAY_SIZE(ip_part); i++) {
-		if (ip_part[i] > 255)
-			return -EINVAL;
-
-		ip += (ip_part[i] << (i * 8));
-	}
-
-	r = vdisk_session_connect(session, (u32)ip, (u16)port);
+	host[VDISK_ID_SIZE - 1] = '\0';
+	r = vdisk_session_connect(session, host, (u16)port);
 	if (r)
 		return r;
 
@@ -369,22 +361,10 @@ static ssize_t vdisk_session_attr_connect_store(struct vdisk_session *session,
 static ssize_t vdisk_session_attr_connect_show(struct vdisk_session *session,
 						char *buf)
 {
-	unsigned char ip_part[4];
-	int i;
-	u32 ip;
-	u16 port;
-
 	down_read(&session->con.rw_sem);
-	ip = session->con.ip;
-	port = session->con.port;
+	snprintf(buf, PAGE_SIZE, "%s %u\n",
+		 session->con.host, session->con.port);
 	up_read(&session->con.rw_sem);
-
-	for (i = 0; i < ARRAY_SIZE(ip_part); i++)
-		ip_part[i] = (ip >> (i * 8)) & 0xFF;
-
-	snprintf(buf, PAGE_SIZE, "%u.%u.%u.%u:%u\n",
-		ip_part[3], ip_part[2], ip_part[1],
-		ip_part[0], session->con.port);
 
 	return strlen(buf);
 }

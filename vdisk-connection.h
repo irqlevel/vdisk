@@ -8,7 +8,7 @@ int vdisk_con_init(struct vdisk_connection *con);
 
 void vdisk_con_deinit(struct vdisk_connection *con);
 
-int vdisk_con_connect(struct vdisk_connection *con, u32 ip, u16 port);
+int vdisk_con_connect(struct vdisk_connection *con, char *host, u16 port);
 
 int vdisk_con_close(struct vdisk_connection *con);
 
@@ -37,5 +37,7 @@ int vdisk_con_copy_to(struct vdisk_connection *con, struct vdisk *disk,
 
 int vdisk_con_discard(struct vdisk_connection *con, struct vdisk *disk,
 		      u64 off, u32 len);
+
+int vdisk_dns_resolve(char *name, struct sockaddr_storage *ss);
 
 #endif

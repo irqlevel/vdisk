@@ -521,8 +521,6 @@ static enum hrtimer_restart vdisk_cache_timer_callback(struct hrtimer *timer)
 
 	disk = container_of(timer, struct vdisk, cache_timer);
 
-	TRACE("disk 0x%p cache timer", disk);
-
 	vdisk_cache_trim(disk, true);
 
 	hrtimer_start(&disk->cache_timer,

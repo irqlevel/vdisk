@@ -4,8 +4,8 @@ set -e
 WDIR=temp
 
 echo 1 > /sys/fs/vdisk/create_session
-echo 104.199.86.71:9111 > /sys/fs/vdisk/session1/connect
-#echo 127.0.0.1:9111 > /sys/fs/vdisk/session1/connect
+#echo 185.87.193.120 9111 > /sys/fs/vdisk/session1/connect
+echo $1 9111 > /sys/fs/vdisk/session1/connect
 echo a@b.com 1q2w3e > /sys/fs/vdisk/session1/login
 
 cat /sys/fs/vdisk/session1/session_id
