@@ -20,6 +20,7 @@ static void vdisk_cache_put(struct vdisk_cache *cache, bool unpin)
 		atomic_dec(&cache->pin_count);
 	}
 
+	WARN_ON(atomic_read(&cache->ref_count) < 1);
 	if (atomic_dec_and_test(&cache->ref_count))
 		vdisk_cache_release(cache);
 }
@@ -39,7 +40,8 @@ static struct vdisk_cache *vdisk_cache_alloc(struct vdisk *disk,
 	atomic_set(&cache->ref_count, 1);
 	atomic_set(&cache->pin_count, 0);
 	init_rwsem(&cache->rw_sem);
-
+	rwlock_init(&cache->lock);
+	cache->age = (1ULL << 63);
 	cache->valid = false;
 	cache->dirty = false;
 	cache->data = vdisk_kmalloc(VDISK_CACHE_SIZE, GFP_NOIO);
@@ -180,7 +182,7 @@ static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
 	int i, n, r;
 
 	INIT_LIST_HEAD(&list);
-	write_lock_irqsave(&disk->cache_lock, irq_flags);
+	read_lock_irqsave(&disk->cache_lock, irq_flags);
 	n = radix_tree_gang_lookup(&disk->cache_root,
 		(void **)batch, *index, ARRAY_SIZE(batch));
 	if (n) {
@@ -193,7 +195,7 @@ static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
 			}
 		}
 	}
-	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
 	if (!n)
 		return -ENOTTY;
 
@@ -226,22 +228,43 @@ static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
 static void vdisk_cache_evict(struct vdisk *disk)
 {
 	unsigned long index;
-	int i, r;
+	int r;
 
 	TRACE("disk 0x%p cache evicting", disk);
 
 	index = 0;
-	for (i = 0; i < 20; i++) {
-		if (!vdisk_cache_overflow(disk))
-			break;
-
+	do {
 		r = __vdisk_cache_evict(disk, &index);
 		if (!r)
 			break;
-	}
+	} while (vdisk_cache_overflow(disk));
 
 	atomic_set(&disk->cache_evicting, 0);
-	TRACE("disk 0x%p cache evicted", disk);
+
+	TRACE("disk 0x%p cache evicted, r %d", disk, r);
+}
+
+static void vdisk_cache_age(struct vdisk *disk)
+{
+	struct vdisk_cache *batch[128], *curr;
+	unsigned long irq_flags;
+	unsigned long index;
+	int n, i;
+
+	index = 0;
+	read_lock_irqsave(&disk->cache_lock, irq_flags);
+	n = radix_tree_gang_lookup(&disk->cache_root,
+		(void **)batch, index, ARRAY_SIZE(batch));
+	if (n) {
+		index = batch[n - 1]->index + 1;
+		for (i = 0; i < n; i++) {
+			curr = batch[i];
+			write_lock(&curr->lock);
+			curr->age = curr->age >> 1;
+			write_unlock(&curr->lock);
+		}
+	}
+	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
 }
 
 static void vdisk_cache_evict_worker(struct work_struct *work)
@@ -521,6 +544,8 @@ static enum hrtimer_restart vdisk_cache_timer_callback(struct hrtimer *timer)
 
 	disk = container_of(timer, struct vdisk, cache_timer);
 
+	vdisk_cache_age(disk);
+
 	vdisk_cache_trim(disk, true);
 
 	hrtimer_start(&disk->cache_timer,
@@ -543,8 +568,9 @@ int vdisk_cache_init(struct vdisk *disk)
 	disk->cache_timer.function = vdisk_cache_timer_callback;
 
 	atomic_set(&disk->cache_evicting, 0);
+
 	disk->cache_wq = alloc_workqueue("vdisk-cache-wq",
-					WQ_MEM_RECLAIM, 0);
+					 WQ_MEM_RECLAIM, 0);
 	if (!disk->cache_wq)
 		return -ENOMEM;
 

@@ -293,6 +293,8 @@ struct vdisk_cache {
 	bool valid;
 	bool dirty;
 	atomic_t pin_count;
+	rwlock_t lock;
+	u64 age;
 };
 
 struct vdisk_global {
