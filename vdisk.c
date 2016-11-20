@@ -131,7 +131,7 @@ static int vdisk_release(struct vdisk *disk)
 	vdisk_cache_deinit(disk);
 
 	r = vdisk_con_close_disk(&disk->session->con, disk->disk_id,
-			     disk->disk_handle);
+				 disk->disk_handle);
 
 	TRACE("disk 0x%p close disk r %d", disk, r);
 
@@ -155,15 +155,15 @@ static void vdisk_session_release(struct vdisk_session *session)
 
 	TRACE("session 0x%p number %d releasing", session, session->number);
 
-	vdisk_con_close(&session->con);
-	vdisk_con_deinit(&session->con);
-
 	down_write(&session->rw_sem);
 	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
 		list_del_init(&curr->list);
 		vdisk_release(curr);
 	}
 	up_write(&session->rw_sem);
+
+	vdisk_con_close(&session->con);
+	vdisk_con_deinit(&session->con);
 
 	vdisk_sysfs_deinit(&session->kobj_holder);
 
@@ -436,24 +436,31 @@ deinit_con:
 }
 
 static int vdisk_session_start_disk(struct vdisk_session *session,
-				    int number, u64 size, u64 disk_id,
+				    char *name, u64 size, u64 disk_id,
 				    char *disk_handle, unsigned char key[32])
 {
 	struct vdisk_global *glob = vdisk_get_global();
 	struct vdisk *disk;
 	struct gendisk *gdisk;
+	int number;
 	int r, i;
 
-	if (number < 0 || number >= VDISK_DISK_NUMBER_MAX)
-		return -EINVAL;
+	TRACE("creating disk %s", name);
+
 	if (size & 511 || (size % VDISK_CACHE_SIZE) != 0)
 		return -EINVAL;
 	if (ARRAY_SIZE(disk->key) != 32)
 		return -EINVAL;
 
-	TRACE("creating disk %d", number);
+	number = -1;
+	for (i = 0; i < VDISK_DISK_NUMBER_MAX; i++) {
+		if (test_and_set_bit(i, glob->disk_numbers) == 0) {
+			number = i;
+			break;
+		}
+	}
 
-	if (test_and_set_bit(number, glob->disk_numbers) != 0)
+	if (number < 0)
 		return -EINVAL;
 
 	disk = vdisk_kzalloc(sizeof(*disk), GFP_KERNEL);
@@ -467,6 +474,8 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	disk->disk_id = disk_id;
 	memcpy(disk->key, key, sizeof(disk->key));
 
+	snprintf(disk->name, ARRAY_SIZE(disk->name),
+		 "%s", name);
 	snprintf(disk->disk_handle, ARRAY_SIZE(disk->disk_handle),
 		"%s", disk_handle);
 
@@ -550,36 +559,38 @@ free_number:
 }
 
 int vdisk_session_create_disk(struct vdisk_session *session,
-			      int number, u64 size, unsigned char key[32])
+			      char *name, u64 size, unsigned char key[32])
 {
 	u64 disk_id;
 	char *disk_handle;
 	int r;
 
-	r = vdisk_con_create_disk(&session->con, size, &disk_id);
+	r = vdisk_con_create_disk(&session->con, name, size, &disk_id);
 	if (r) {
 		TRACE_ERR(r, "create disk failed");
 		return r;
 	}
 
-	TRACE("disk disk_id %llu size %llu created", disk_id, size);
+	TRACE("disk name %s disk_id %llu size %llu created",
+	      name, disk_id, size);
 
-	r = vdisk_con_open_disk(&session->con, disk_id, &disk_handle, &size);
+	r = vdisk_con_open_disk(&session->con, name, &disk_id,
+				&disk_handle, &size);
 	if (r) {
 		TRACE_ERR(r, "can't open disk");
 		goto delete_disk;
 	}
 
-	TRACE("disk %llu open r %d", disk_id, r);
+	TRACE("disk %s open r %d", name, r);
 
-	r = vdisk_session_start_disk(session, number, size, disk_id,
+	r = vdisk_session_start_disk(session, name, size, disk_id,
 				     disk_handle, key);
 	if (r) {
 		TRACE_ERR(r, "can't start disk");
 		goto close_disk;
 	}
 
-	TRACE("disk %llu start r %d", disk_id, r);
+	TRACE("disk %s start r %d", name, r);
 
 	vdisk_kfree(disk_handle);
 	return 0;
@@ -588,26 +599,24 @@ close_disk:
 	vdisk_con_close_disk(&session->con, disk_id, disk_handle);
 	vdisk_kfree(disk_handle);
 delete_disk:
-	vdisk_con_delete_disk(&session->con, disk_id);
+	vdisk_con_delete_disk(&session->con, name);
 	return r;
 }
 
-int vdisk_session_delete_disk(struct vdisk_session *session, int number)
+int vdisk_session_delete_disk(struct vdisk_session *session, char *name)
 {
 	struct vdisk *curr, *tmp;
-	u64 disk_id;
 	int r;
 
-	TRACE("deleting disk %d", number);
+	TRACE("deleting disk %s", name);
 
 	r = -ENOTTY;
 	down_write(&session->rw_sem);
 	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
-		if (curr->number == number) {
+		if (strncmp(curr->name, name, strlen(curr->name) + 1) == 0) {
 			list_del_init(&curr->list);
-			disk_id = curr->disk_id;
 			vdisk_release(curr);
-			r = vdisk_con_delete_disk(&session->con, disk_id);
+			r = vdisk_con_delete_disk(&session->con, name);
 			break;
 		}
 	}
@@ -616,23 +625,25 @@ int vdisk_session_delete_disk(struct vdisk_session *session, int number)
 	return r;
 }
 
-int vdisk_session_open_disk(struct vdisk_session *session, int number,
-			    u64 disk_id, unsigned char key[32])
+int vdisk_session_open_disk(struct vdisk_session *session, char *name,
+			    unsigned char key[32])
 {
-	int r;
+	u64 disk_id, size;
 	char *disk_handle;
-	u64 size;
+	int r;
 
-	r = vdisk_con_open_disk(&session->con, disk_id, &disk_handle, &size);
+	r = vdisk_con_open_disk(&session->con, name, &disk_id,
+				&disk_handle, &size);
 	if (r) {
 		TRACE_ERR(r, "cant open disk");
 		return r;
 	}
 
-	TRACE("session 0x%p open disk %llu r %d", session, disk_id, r);
+	TRACE("session 0x%p open disk name %s r %d",
+	      session, name, r);
 
-	r = vdisk_session_start_disk(session, number, size,
-				     disk_id, disk_handle, key);
+	r = vdisk_session_start_disk(session, name, size, disk_id,
+				     disk_handle, key);
 	if (r) {
 		TRACE_ERR(r, "can't start disk");
 		goto close_disk;
@@ -650,21 +661,21 @@ free_handle:
 	return r;
 }
 
-int vdisk_session_close_disk(struct vdisk_session *session, int number)
+int vdisk_session_close_disk(struct vdisk_session *session, char *name)
 {
 	struct vdisk *curr, *tmp;
 	int r;
 
-	TRACE("closing disk %d", number);
+	TRACE("closing disk %s", name);
 
 	r = -ENOTTY;
 	down_write(&session->rw_sem);
 	list_for_each_entry_safe(curr, tmp, &session->disk_list, list) {
-		if (curr->number == number) {
+		if (strncmp(curr->name, name, strlen(curr->name) + 1) == 0) {
 			list_del_init(&curr->list);
 			r = vdisk_release(curr);
-			TRACE("disk 0x%p number %d closed r %d",
-			      curr, number, r);
+			TRACE("disk 0x%p name %s closed r %d",
+			      curr, name, r);
 			break;
 		}
 	}

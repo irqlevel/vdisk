@@ -100,6 +100,7 @@ struct vdisk_resp_logout {
 
 struct vdisk_req_disk_create {
 	char session_id[VDISK_ID_SIZE];
+	char name[VDISK_ID_SIZE];
 	__le64 size;
 };
 
@@ -109,7 +110,7 @@ struct vdisk_resp_disk_create {
 
 struct vdisk_req_disk_delete {
 	char session_id[VDISK_ID_SIZE];
-	__le64 disk_id;
+	char name[VDISK_ID_SIZE];
 };
 
 struct vdisk_resp_disk_delete {
@@ -118,11 +119,12 @@ struct vdisk_resp_disk_delete {
 
 struct vdisk_req_disk_open {
 	char session_id[VDISK_ID_SIZE];
-	__le64 disk_id;
+	char name[VDISK_ID_SIZE];
 };
 
 struct vdisk_resp_disk_open {
 	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
 	__le64 size;
 };
 
@@ -270,6 +272,7 @@ struct vdisk {
 	u64 size;
 	u64 disk_id;
 	char disk_handle[VDISK_ID_SIZE];
+	char name[VDISK_ID_SIZE];
 
 	rwlock_t cache_lock;
 	struct radix_tree_root cache_root;
@@ -311,14 +314,14 @@ void vdisk_disk_set_iops_limits(struct vdisk *disk, u64 *limit_iops, int len);
 void vdisk_disk_set_bps_limits(struct vdisk *disk, u64 *limit_bps, int len);
 
 int vdisk_session_create_disk(struct vdisk_session *session,
-			      int number, u64 size, unsigned char key[32]);
+			      char *name, u64 size, unsigned char key[32]);
 
-int vdisk_session_open_disk(struct vdisk_session *session, int number,
-			    u64 disk_id, unsigned char key[32]);
+int vdisk_session_open_disk(struct vdisk_session *session,
+			    char *name, unsigned char key[32]);
 
-int vdisk_session_close_disk(struct vdisk_session *session, int number);
+int vdisk_session_close_disk(struct vdisk_session *session, char *name);
 
-int vdisk_session_delete_disk(struct vdisk_session *session, int number);
+int vdisk_session_delete_disk(struct vdisk_session *session, char *name);
 
 int vdisk_session_connect(struct vdisk_session *session, char *host, u16 port);
 

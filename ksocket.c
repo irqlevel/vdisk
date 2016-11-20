@@ -471,8 +471,10 @@ static int ksock_dns_resolve(char *name, struct sockaddr_storage *ss)
 	ip_len = dns_query(NULL, name, strlen(name), NULL, &ip_addr, NULL);
 	if (ip_len > 0)
 		r = ksock_pton(ip_addr, ip_len, ss);
-	else
+	else {
+		TRACE_ERR(ip_len, "dns_query %s failed", name);
 		r = -ESRCH;
+	}
 	kfree(ip_addr);
 	return r;
 }

@@ -483,7 +483,8 @@ unlock:
 	return r;
 }
 
-int vdisk_con_create_disk(struct vdisk_connection *con, u64 size, u64 *disk_id)
+int vdisk_con_create_disk(struct vdisk_connection *con, char *name, u64 size,
+			  u64 *disk_id)
 {
 	struct vdisk_req_header *req;
 	struct vdisk_req_disk_create *disk_create;
@@ -505,6 +506,8 @@ int vdisk_con_create_disk(struct vdisk_connection *con, u64 size, u64 *disk_id)
 	disk_create = (struct vdisk_req_disk_create *)(req + 1);
 	snprintf(disk_create->session_id, ARRAY_SIZE(disk_create->session_id),
 		 "%s", con->session_id);
+	snprintf(disk_create->name, ARRAY_SIZE(disk_create->name),
+		 "%s", name);
 	disk_create->size = cpu_to_le64(size);
 
 	r = vdisk_send_req(con, req);
@@ -526,7 +529,7 @@ unlock:
 	return r;
 }
 
-int vdisk_con_delete_disk(struct vdisk_connection *con, u64 disk_id)
+int vdisk_con_delete_disk(struct vdisk_connection *con, char *name)
 {
 	struct vdisk_req_header *req;
 	struct vdisk_req_disk_delete *disk_delete;
@@ -548,7 +551,8 @@ int vdisk_con_delete_disk(struct vdisk_connection *con, u64 disk_id)
 	disk_delete = (struct vdisk_req_disk_delete *)(req + 1);
 	snprintf(disk_delete->session_id, ARRAY_SIZE(disk_delete->session_id),
 		 "%s", con->session_id);
-	disk_delete->disk_id = cpu_to_le64(disk_id);
+	snprintf(disk_delete->name, ARRAY_SIZE(disk_delete->name),
+		 "%s", name);
 	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
@@ -566,8 +570,8 @@ unlock:
 	return r;
 }
 
-int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
-			char **disk_handle, u64 *size)
+int vdisk_con_open_disk(struct vdisk_connection *con, char *name,
+			u64 *disk_id, char **disk_handle, u64 *size)
 {
 	struct vdisk_req_header *req;
 	struct vdisk_req_disk_open *disk_open;
@@ -591,7 +595,9 @@ int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
 	disk_open = (struct vdisk_req_disk_open *)(req + 1);
 	snprintf(disk_open->session_id, ARRAY_SIZE(disk_open->session_id),
 		 "%s", con->session_id);
-	disk_open->disk_id = cpu_to_le64(disk_id);
+	snprintf(disk_open->name, ARRAY_SIZE(disk_open->name),
+		 "%s", name);
+
 	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;
@@ -612,6 +618,7 @@ int vdisk_con_open_disk(struct vdisk_connection *con, u64 disk_id,
 	snprintf(ldisk_handle, count, "%s", resp->disk_handle);
 	*disk_handle = ldisk_handle;
 	*size = le64_to_cpu(resp->size);
+	*disk_id = le64_to_cpu(resp->disk_id);
 	r = 0;
 
 free_resp:
@@ -649,8 +656,8 @@ int vdisk_con_close_disk(struct vdisk_connection *con, u64 disk_id,
 		 "%s", con->session_id);
 	snprintf(disk_close->disk_handle, ARRAY_SIZE(disk_close->disk_handle),
 		"%s", disk_handle);
-
 	disk_close->disk_id = cpu_to_le64(disk_id);
+
 	r = vdisk_send_req(con, req);
 	if (r)
 		goto free_req;

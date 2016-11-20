@@ -225,22 +225,24 @@ static ssize_t vdisk_session_attr_create_disk_store(struct vdisk_session *sess,
 						const char *buf, size_t count)
 {
 	char key_buf[VDISK_ID_SIZE];
+	char name[VDISK_ID_SIZE];
 	unsigned char key[32];
 	u64 size;
-	int number;
 	int r;
 
-	r = sscanf(buf, "%d %llu "VDISK_ID_SCANF_FMT, &number, &size, key_buf);
+	r = sscanf(buf, VDISK_ID_SCANF_FMT" %llu "VDISK_ID_SCANF_FMT,
+		   name, &size, key_buf);
 	if (r < 3)
 		return -EINVAL;
 
+	name[VDISK_ID_SIZE - 1] = '\0';
 	key_buf[VDISK_ID_SIZE - 1] = '\0';
 
 	r = vdisk_hex_to_bytes(key_buf, strlen(key_buf), key, ARRAY_SIZE(key));
 	if (r)
 		return r;
 
-	r = vdisk_session_create_disk(sess, number, size, key);
+	r = vdisk_session_create_disk(sess, name, size, key);
 	if (r)
 		return r;
 
@@ -258,23 +260,22 @@ static ssize_t vdisk_session_attr_open_disk_store(struct vdisk_session *sess,
 						  const char *buf, size_t count)
 {
 	char key_buf[VDISK_ID_SIZE];
+	char name[VDISK_ID_SIZE];
 	unsigned char key[32];
-	u64 disk_number;
-	int number;
 	int r;
 
-	r = sscanf(buf, "%d %llu "VDISK_ID_SCANF_FMT, &number,
-		   &disk_number, key_buf);
-	if (r < 3)
+	r = sscanf(buf, VDISK_ID_SCANF_FMT" "VDISK_ID_SCANF_FMT, name, key_buf);
+	if (r < 2)
 		return -EINVAL;
 
+	name[VDISK_ID_SIZE - 1] = '\0';
 	key_buf[VDISK_ID_SIZE - 1] = '\0';
 
 	r = vdisk_hex_to_bytes(key_buf, strlen(key_buf), key, ARRAY_SIZE(key));
 	if (r)
 		return r;
 
-	r = vdisk_session_open_disk(sess, number, disk_number, key);
+	r = vdisk_session_open_disk(sess, name, key);
 	if (r)
 		return r;
 
@@ -291,14 +292,16 @@ static ssize_t vdisk_session_attr_open_disk_show(struct vdisk_session *sess,
 static ssize_t vdisk_session_attr_close_disk_store(struct vdisk_session *sess,
 						const char *buf, size_t count)
 {
-	int number;
+	char name[VDISK_ID_SIZE];
 	int r;
 
-	r = sscanf(buf, "%d", &number);
+	r = sscanf(buf, VDISK_ID_SCANF_FMT, name);
 	if (r < 1)
 		return -EINVAL;
 
-	r = vdisk_session_close_disk(sess, number);
+	name[VDISK_ID_SIZE - 1] = '\0';
+
+	r = vdisk_session_close_disk(sess, name);
 	if (r)
 		return r;
 
@@ -315,14 +318,16 @@ static ssize_t vdisk_session_attr_close_disk_show(struct vdisk_session *sess,
 static ssize_t vdisk_session_attr_delete_disk_store(struct vdisk_session *sess,
 						const char *buf, size_t count)
 {
-	int number;
+	char name[VDISK_ID_SIZE];
 	int r;
 
-	r = sscanf(buf, "%d", &number);
+	r = sscanf(buf, VDISK_ID_SCANF_FMT, name);
 	if (r < 1)
 		return -EINVAL;
 
-	r = vdisk_session_delete_disk(sess, number);
+	name[VDISK_ID_SIZE - 1] = '\0';
+
+	r = vdisk_session_delete_disk(sess, name);
 	if (r)
 		return r;
 
