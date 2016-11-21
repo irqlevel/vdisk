@@ -173,20 +173,25 @@ static bool vdisk_cache_overflow(struct vdisk *disk)
 	return overflow;
 }
 
-static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
+static int __vdisk_cache_evict(struct vdisk *disk)
 {
 	struct vdisk_cache *batch[128];
 	struct vdisk_cache *curr, *tmp, *deleted;
-	unsigned long irq_flags;
+	unsigned long irq_flags, index;
 	struct list_head list;
 	int i, n, r;
 
 	INIT_LIST_HEAD(&list);
-	read_lock_irqsave(&disk->cache_lock, irq_flags);
-	n = radix_tree_gang_lookup(&disk->cache_root,
-		(void **)batch, *index, ARRAY_SIZE(batch));
-	if (n) {
-		*index = batch[n - 1]->index + 1;
+	index = 0;
+	for (;;) {
+		read_lock_irqsave(&disk->cache_lock, irq_flags);
+		n = radix_tree_gang_lookup(&disk->cache_root,
+			(void **)batch, index, ARRAY_SIZE(batch));
+		read_unlock_irqrestore(&disk->cache_lock, irq_flags);
+		if (!n)
+			break;
+
+		index = batch[n - 1]->index + 1;
 		for (i = 0; i < n; i++) {
 			curr = batch[i];
 			if (atomic_read(&curr->pin_count) == 0) {
@@ -195,9 +200,6 @@ static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
 			}
 		}
 	}
-	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
-	if (!n)
-		return -ENOTTY;
 
 	list_for_each_entry_safe(curr, tmp, &list, list) {
 		down_write(&curr->rw_sem);
@@ -210,34 +212,34 @@ static int __vdisk_cache_evict(struct vdisk *disk, unsigned long *index)
 		up_write(&curr->rw_sem);
 	}
 
-	write_lock_irqsave(&disk->cache_lock, irq_flags);
 	list_for_each_entry_safe(curr, tmp, &list, list) {
+		write_lock_irqsave(&disk->cache_lock, irq_flags);
 		if (__vdisk_cache_overflow(disk) &&
 		    atomic_read(&curr->pin_count) == 0 && !curr->dirty) {
 			deleted = __vdisk_cache_delete(disk, curr->index);
 			if (!WARN_ON(deleted != curr))
 				vdisk_cache_put(curr, false);
 		}
+		write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+
 		list_del_init(&curr->list);
 		vdisk_cache_put(curr, false);
 	}
-	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+
 	return 0;
 }
 
 static void vdisk_cache_evict(struct vdisk *disk)
 {
-	unsigned long index;
 	int r;
 
 	TRACE("disk 0x%p cache evicting", disk);
 
-	index = 0;
-	do {
-		r = __vdisk_cache_evict(disk, &index);
+	while (vdisk_cache_overflow(disk)) {
+		r = __vdisk_cache_evict(disk);
 		if (!r)
 			break;
-	} while (vdisk_cache_overflow(disk));
+	}
 
 	atomic_set(&disk->cache_evicting, 0);
 
@@ -252,10 +254,14 @@ static void vdisk_cache_age(struct vdisk *disk)
 	int n, i;
 
 	index = 0;
-	read_lock_irqsave(&disk->cache_lock, irq_flags);
-	n = radix_tree_gang_lookup(&disk->cache_root,
-		(void **)batch, index, ARRAY_SIZE(batch));
-	if (n) {
+	for (;;) {
+		read_lock_irqsave(&disk->cache_lock, irq_flags);
+		n = radix_tree_gang_lookup(&disk->cache_root,
+			(void **)batch, index, ARRAY_SIZE(batch));
+		if (!n)
+			break;
+		read_unlock_irqrestore(&disk->cache_lock, irq_flags);
+
 		index = batch[n - 1]->index + 1;
 		for (i = 0; i < n; i++) {
 			curr = batch[i];
@@ -264,7 +270,6 @@ static void vdisk_cache_age(struct vdisk *disk)
 			write_unlock(&curr->lock);
 		}
 	}
-	read_unlock_irqrestore(&disk->cache_lock, irq_flags);
 }
 
 static void vdisk_cache_evict_worker(struct work_struct *work)

@@ -8,25 +8,25 @@ rw=write
 
 [dev-rand-write]
 size=128m
-filename=/dev/vdisk1
+filename=/dev/vdisk0
 rw=randwrite
 
 [fs-write]
 size=64m
-filename=/mnt/vdisk1/fio-file
+filename=/mnt/vdisk0/fio-file
 rw=write
 
 [fs-read]
 size=64m
-filename=/mnt/vdisk1/fio-file
+filename=/mnt/vdisk0/fio-file
 rw=read
 
 [fs-rand-write]
 rw=randwrite
 size=64m
-filename=/mnt/vdisk1/fio-file
+filename=/mnt/vdisk0/fio-file
 
 [fs-rand-read]
 rw=randread
 size=64m
-filename=/mnt/vdisk1/fio-file
+filename=/mnt/vdisk0/fio-file
