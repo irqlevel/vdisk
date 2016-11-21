@@ -2,6 +2,8 @@
 #include "vdisk-trace-helpers.h"
 #include "vdisk-connection.h"
 
+#include <linux/sort.h>
+
 static void vdisk_cache_get(struct vdisk_cache *cache)
 {
 	atomic_inc(&cache->ref_count);
@@ -173,34 +175,79 @@ static bool vdisk_cache_overflow(struct vdisk *disk)
 	return overflow;
 }
 
+static int vdisk_cache_cmp_age(const void *a, const void *b)
+{
+	struct vdisk_cache *node_a = *((struct vdisk_cache **)a);
+	struct vdisk_cache *node_b = *((struct vdisk_cache **)b);
+
+	if (node_a->age > node_b->age)
+		return 1;
+	else if (node_a->age < node_b->age)
+		return -1;
+	else
+		return 0;
+}
+
+static void vdisk_cache_swap_ptr(void *a, void *b, int size)
+{
+	struct vdisk_cache **node_a = a;
+	struct vdisk_cache **node_b = b;
+	struct vdisk_cache *tmp;
+
+	tmp = *node_a;
+	*node_a = *node_b;
+	*node_b = tmp;
+}
+
 static int __vdisk_cache_evict(struct vdisk *disk)
 {
 	struct vdisk_cache *batch[128];
 	struct vdisk_cache *curr, *tmp, *deleted;
+	struct vdisk_cache **arr;
+
 	unsigned long irq_flags, index;
 	struct list_head list;
-	int i, n, r;
+	size_t i, n, list_count;
+	int r;
 
 	INIT_LIST_HEAD(&list);
 	index = 0;
+	list_count = 0;
 	for (;;) {
 		read_lock_irqsave(&disk->cache_lock, irq_flags);
 		n = radix_tree_gang_lookup(&disk->cache_root,
 			(void **)batch, index, ARRAY_SIZE(batch));
+		if (n) {
+			index = batch[n - 1]->index + 1;
+			for (i = 0; i < n; i++) {
+				curr = batch[i];
+				if (atomic_read(&curr->pin_count) == 0) {
+					vdisk_cache_get(curr);
+					list_add_tail(&curr->list, &list);
+					list_count++;
+				}
+			}
+		}
 		read_unlock_irqrestore(&disk->cache_lock, irq_flags);
 		if (!n)
 			break;
-
-		index = batch[n - 1]->index + 1;
-		for (i = 0; i < n; i++) {
-			curr = batch[i];
-			if (atomic_read(&curr->pin_count) == 0) {
-				vdisk_cache_get(curr);
-				list_add_tail(&curr->list, &list);
-			}
-		}
 	}
 
+	arr = vdisk_kcalloc(list_count, sizeof(struct vdisk_cache *),
+			    GFP_NOIO);
+	if (!arr) {
+		r = -ENOMEM;
+		TRACE_ERR(r, "can't alloc cache array");
+
+		list_for_each_entry_safe(curr, tmp, &list, list) {
+			list_del_init(&curr->list);
+			vdisk_cache_put(curr, false);
+		}
+
+		return r;
+	}
+
+	i = 0;
 	list_for_each_entry_safe(curr, tmp, &list, list) {
 		down_write(&curr->rw_sem);
 		if (curr->dirty) {
@@ -210,12 +257,20 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 					  curr->index, r);
 		}
 		up_write(&curr->rw_sem);
+		arr[i++] = curr;
 	}
 
-	list_for_each_entry_safe(curr, tmp, &list, list) {
+	sort(arr, list_count, sizeof(struct vdisk_cache *), vdisk_cache_cmp_age,
+	     vdisk_cache_swap_ptr);
+
+	for (i = 0; i < list_count; i++) {
+		curr = arr[i];
+
 		write_lock_irqsave(&disk->cache_lock, irq_flags);
 		if (__vdisk_cache_overflow(disk) &&
 		    atomic_read(&curr->pin_count) == 0 && !curr->dirty) {
+			TRACE("cache evict %llu age 0x%llx",
+			      curr->index, curr->age);
 			deleted = __vdisk_cache_delete(disk, curr->index);
 			if (!WARN_ON(deleted != curr))
 				vdisk_cache_put(curr, false);
@@ -226,6 +281,10 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 		vdisk_cache_put(curr, false);
 	}
 
+	WARN_ON(!list_empty(&list));
+
+	vdisk_kfree(arr);
+
 	return 0;
 }
 
@@ -235,6 +294,7 @@ static void vdisk_cache_evict(struct vdisk *disk)
 
 	TRACE("disk 0x%p cache evicting", disk);
 
+	r = 0;
 	while (vdisk_cache_overflow(disk)) {
 		r = __vdisk_cache_evict(disk);
 		if (!r)
@@ -258,17 +318,18 @@ static void vdisk_cache_age(struct vdisk *disk)
 		read_lock_irqsave(&disk->cache_lock, irq_flags);
 		n = radix_tree_gang_lookup(&disk->cache_root,
 			(void **)batch, index, ARRAY_SIZE(batch));
+		if (n) {
+			index = batch[n - 1]->index + 1;
+			for (i = 0; i < n; i++) {
+				curr = batch[i];
+				write_lock(&curr->lock);
+				curr->age = curr->age >> 1;
+				write_unlock(&curr->lock);
+			}
+		}
+		read_unlock_irqrestore(&disk->cache_lock, irq_flags);
 		if (!n)
 			break;
-		read_unlock_irqrestore(&disk->cache_lock, irq_flags);
-
-		index = batch[n - 1]->index + 1;
-		for (i = 0; i < n; i++) {
-			curr = batch[i];
-			write_lock(&curr->lock);
-			curr->age = curr->age >> 1;
-			write_unlock(&curr->lock);
-		}
 	}
 }
 
@@ -303,7 +364,7 @@ void vdisk_cache_deinit(struct vdisk *disk)
 			WARN_ON(tmp != curr);
 		}
 		write_unlock_irqrestore(&disk->cache_lock, irq_flags);
-		if (n == 0)
+		if (!n)
 			break;
 
 		for (i = 0; i < n; i++) {
