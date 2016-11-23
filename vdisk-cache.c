@@ -478,9 +478,15 @@ static int __vdisk_cache_copy_to(struct vdisk_cache *cache,
 			void *buf, unsigned long rw)
 {
 	int r;
+	bool overwrite;
+
+	if (off == 0 && len == VDISK_CACHE_SIZE)
+		overwrite = true;
+	else
+		overwrite = false;
 
 	down_write(&cache->rw_sem);
-	if (!cache->valid) {
+	if (!cache->valid && !overwrite) {
 		r = __vdisk_cache_read(cache, con);
 		if (r) {
 			TRACE_ERR(r, "can't read cache %llu", cache->index);
@@ -490,6 +496,9 @@ static int __vdisk_cache_copy_to(struct vdisk_cache *cache,
 	}
 
 	memcpy((unsigned char *)cache->data + off, buf, len);
+	if (!cache->valid && overwrite)
+		cache->valid = true;
+
 	cache->dirty = true;
 	r = 0;
 
