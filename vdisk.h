@@ -45,15 +45,17 @@
 #define VDISK_ID_SCANF_FMT			"%255s"
 
 /*
- * Define disk cache entry size.
+ * Define disk block size.
  * Should be smaller than 16KB to not exceed TLS record max size.
  */
-#define VDISK_CACHE_PAGES		2
-#define VDISK_CACHE_SIZE		(VDISK_CACHE_PAGES * PAGE_SIZE)
 
-#define VDISK_QUEUE_MAX			2
+#define VDISK_BLOCK_SIZE		(4096)
+
+#define VDISK_CACHE_SIZE		(1 * VDISK_BLOCK_SIZE)
 
 #define VDISK_CACHE_TIMER_PERIOD_MS	20
+
+#define VDISK_QUEUE_MAX			2
 
 #define VDISK_TIMEOUT_MS		(60 * 1000)
 
@@ -168,7 +170,7 @@ struct vdisk_req_disk_read {
 };
 
 struct vdisk_resp_disk_read {
-	char data[VDISK_CACHE_SIZE];
+	char data[VDISK_BLOCK_SIZE];
 	unsigned char iv[16];
 };
 
@@ -179,7 +181,7 @@ struct vdisk_req_disk_write {
 	__le64 offset;
 	__le32 size;
 	__le32 flags;
-	char data[VDISK_CACHE_SIZE];
+	char data[VDISK_BLOCK_SIZE];
 	unsigned char iv[16];
 };
 

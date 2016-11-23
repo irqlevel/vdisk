@@ -121,12 +121,20 @@ static int __vdisk_cache_read(struct vdisk_cache *cache,
 				struct vdisk_connection *con)
 {
 	struct vdisk *disk;
-	int r;
+	int r, i, off;
 
 	disk = cache->disk;
-	r = vdisk_con_copy_from(con, disk, cache->data,
-				cache->index * VDISK_CACHE_SIZE,
-				VDISK_CACHE_SIZE, 0);
+
+	off = 0;
+	for (i = 0; i < VDISK_CACHE_SIZE / VDISK_BLOCK_SIZE; i++) {
+		r = vdisk_con_copy_from(con, disk,
+				(unsigned char *)cache->data + off,
+				cache->index * VDISK_CACHE_SIZE + off,
+				VDISK_BLOCK_SIZE, 0);
+		if (r)
+			break;
+		off += VDISK_BLOCK_SIZE;
+	}
 
 	TRACE("cache read %llu r %d", cache->index, r);
 	return r;
@@ -137,7 +145,7 @@ static int __vdisk_cache_write(struct vdisk_cache *cache,
 				unsigned long rw)
 {
 	struct vdisk *disk;
-	int r;
+	int r, i, off;
 
 	if (WARN_ON(!cache->valid))
 		return -EINVAL;
@@ -145,9 +153,17 @@ static int __vdisk_cache_write(struct vdisk_cache *cache,
 		return -EINVAL;
 
 	disk = cache->disk;
-	r = vdisk_con_copy_to(con, disk, cache->data,
-			      cache->index * VDISK_CACHE_SIZE,
-			      VDISK_CACHE_SIZE, rw);
+	off = 0;
+	for (i = 0; i < VDISK_CACHE_SIZE / VDISK_BLOCK_SIZE; i++) {
+		r = vdisk_con_copy_to(con, disk,
+				(unsigned char *)cache->data + off,
+				cache->index * VDISK_CACHE_SIZE + off,
+				VDISK_BLOCK_SIZE, rw);
+		if (r)
+			break;
+		off += VDISK_BLOCK_SIZE;
+	}
+
 	if (!r)
 		cache->dirty = false;
 
