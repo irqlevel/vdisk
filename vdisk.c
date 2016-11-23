@@ -125,6 +125,9 @@ static int vdisk_release(struct vdisk *disk)
 
 	del_gendisk(disk->gdisk);
 
+	hrtimer_cancel(&disk->renew_timer);
+	destroy_workqueue(disk->wq);
+
 	for (i = 0; i < ARRAY_SIZE(disk->queue); i++)
 		vdisk_queue_deinit(disk, i);
 
@@ -435,6 +438,33 @@ deinit_con:
 	return r;
 }
 
+static void vdisk_renew_worker(struct work_struct *work)
+{
+	struct vdisk *disk;
+	int r;
+
+
+	disk = container_of(work, struct vdisk, renew_work);
+
+	r = vdisk_con_renew(&disk->session->con, disk);
+	TRACE("disk 0x%p renew r %d", disk, r);
+}
+
+static enum hrtimer_restart vdisk_renew_timer_callback(struct hrtimer *timer)
+{
+	struct vdisk *disk;
+
+	disk = container_of(timer, struct vdisk, renew_timer);
+
+	queue_work(disk->wq, &disk->renew_work);
+
+	hrtimer_start(&disk->renew_timer,
+		      ktime_add_ms(ktime_get(), VDISK_TIMEOUT_MS / 4),
+		      HRTIMER_MODE_ABS);
+
+	return HRTIMER_NORESTART;
+}
+
 static int vdisk_session_start_disk(struct vdisk_session *session,
 				    char *name, u64 size, u64 disk_id,
 				    char *disk_handle, unsigned char key[32])
@@ -479,9 +509,18 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	snprintf(disk->disk_handle, ARRAY_SIZE(disk->disk_handle),
 		"%s", disk_handle);
 
+	hrtimer_init(&disk->renew_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	disk->renew_timer.function = vdisk_renew_timer_callback;
+	INIT_WORK(&disk->renew_work, vdisk_renew_worker);
+	disk->wq = alloc_workqueue("vdisk-wq", WQ_MEM_RECLAIM, 0);
+	if (!disk->wq) {
+		r = -ENOMEM;
+		goto free_disk;
+	}
+
 	r = vdisk_cache_init(disk);
 	if (r)
-		goto free_disk;
+		goto free_wq;
 
 	for (i = 0; i < ARRAY_SIZE(disk->queue); i++) {
 		r = vdisk_queue_init(disk, i);
@@ -540,6 +579,9 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 
 	add_disk(gdisk);
 
+	hrtimer_start(&disk->renew_timer, ktime_add_ms(ktime_get(),
+		      (VDISK_TIMEOUT_MS) / 4), HRTIMER_MODE_ABS);
+
 	return 0;
 
 free_gdisk:
@@ -551,6 +593,8 @@ free_queues:
 		vdisk_queue_deinit(disk, i);
 free_cache:
 	vdisk_cache_deinit(disk);
+free_wq:
+	destroy_workqueue(disk->wq);
 free_disk:
 	vdisk_kfree(disk);
 free_number:

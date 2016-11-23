@@ -41,4 +41,6 @@ int vdisk_con_discard(struct vdisk_connection *con, struct vdisk *disk,
 
 int vdisk_dns_resolve(char *name, struct sockaddr_storage *ss);
 
+int vdisk_con_renew(struct vdisk_connection *con, struct vdisk *disk);
+
 #endif

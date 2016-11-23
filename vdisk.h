@@ -28,31 +28,34 @@
 #define VDISK_REQ_MAGIC		0xCBDACBDA
 #define VDISK_RESP_MAGIC	0xCBDACBDA
 
-#define VDISK_REQ_TYPE_LOGIN		1
-#define VDISK_REQ_TYPE_LOGOUT		2
-#define VDISK_REQ_TYPE_DISK_CREATE	3
-#define VDISK_REQ_TYPE_DISK_DELETE	4
-#define VDISK_REQ_TYPE_DISK_OPEN	5
-#define VDISK_REQ_TYPE_DISK_CLOSE	6
-#define VDISK_REQ_TYPE_DISK_READ	7
-#define VDISK_REQ_TYPE_DISK_WRITE	8
-#define VDISK_REQ_TYPE_DISK_DISCARD	9
+#define VDISK_REQ_TYPE_LOGIN			1
+#define VDISK_REQ_TYPE_LOGOUT			2
+#define VDISK_REQ_TYPE_DISK_CREATE		3
+#define VDISK_REQ_TYPE_DISK_DELETE		4
+#define VDISK_REQ_TYPE_DISK_OPEN		5
+#define VDISK_REQ_TYPE_DISK_CLOSE		6
+#define VDISK_REQ_TYPE_DISK_READ		7
+#define VDISK_REQ_TYPE_DISK_WRITE		8
+#define VDISK_REQ_TYPE_DISK_DISCARD		9
+#define VDISK_REQ_TYPE_DISK_RENEW		10
 
-#define VDISK_BODY_MAX		65536
+#define VDISK_BODY_MAX				65536
 
-#define VDISK_ID_SIZE		256
-#define VDISK_ID_SCANF_FMT	"%255s"
+#define VDISK_ID_SIZE				256
+#define VDISK_ID_SCANF_FMT			"%255s"
 
 /*
  * Define disk cache entry size.
  * Should be smaller than 16KB to not exceed TLS record max size.
  */
-#define VDISK_CACHE_PAGES	2
-#define VDISK_CACHE_SIZE	(VDISK_CACHE_PAGES * PAGE_SIZE)
+#define VDISK_CACHE_PAGES		2
+#define VDISK_CACHE_SIZE		(VDISK_CACHE_PAGES * PAGE_SIZE)
 
-#define VDISK_QUEUE_MAX		2
+#define VDISK_QUEUE_MAX			2
 
-#define VDISK_CACHE_TIMER_PERIOD_MS 20
+#define VDISK_CACHE_TIMER_PERIOD_MS	20
+
+#define VDISK_TIMEOUT_MS		(60 * 1000)
 
 struct vdisk_kobject_holder {
 	struct kobject kobj;
@@ -196,6 +199,16 @@ struct vdisk_resp_disk_discard {
 	__le64 padding;
 };
 
+struct vdisk_req_disk_renew {
+	char session_id[VDISK_ID_SIZE];
+	char disk_handle[VDISK_ID_SIZE];
+	__le64 disk_id;
+};
+
+struct vdisk_resp_disk_renew {
+	__le64 padding;
+};
+
 struct vdisk_bio {
 	struct list_head list;
 	struct bio *bio;
@@ -218,6 +231,10 @@ struct vdisk_connection {
 	struct vdisk_req_header discard_req_header;
 	struct vdisk_req_disk_discard discard_req;
 	struct vdisk_resp_disk_discard discard_resp;
+
+	struct vdisk_req_header renew_req_header;
+	struct vdisk_req_disk_renew renew_req;
+	struct vdisk_resp_disk_renew renew_resp;
 
 	unsigned char key[32];
 
@@ -282,6 +299,11 @@ struct vdisk {
 	struct workqueue_struct *cache_wq;
 	atomic_t cache_evicting;
 	struct hrtimer cache_timer;
+
+	struct workqueue_struct *wq;
+
+	struct hrtimer renew_timer;
+	struct work_struct renew_work;
 
 	unsigned char key[32];
 };

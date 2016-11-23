@@ -11,6 +11,16 @@ size=128m
 filename=/dev/vdisk0
 rw=randwrite
 
+[dev-read]
+size=256m
+filename=/dev/vdisk0
+rw=read
+
+[dev-rand-read]
+size=256m
+filename=/dev/vdisk0
+rw=randread
+
 [fs-write]
 size=64m
 filename=/mnt/vdisk0/fio-file
@@ -25,6 +35,16 @@ rw=read
 rw=randwrite
 size=64m
 filename=/mnt/vdisk0/fio-file
+
+[fs-file-rand-write]
+rw=randwrite
+size=256m
+filename=fio-file
+
+[fs-file-read]
+rw=read
+size=256m
+filename=fio-file
 
 [fs-rand-read]
 rw=randread

@@ -812,3 +812,37 @@ unlock:
 
 	return r;
 }
+
+int vdisk_con_renew(struct vdisk_connection *con, struct vdisk *disk)
+{
+	struct vdisk_req_header *req_header = &con->renew_req_header;
+	struct vdisk_req_disk_renew *req = &con->renew_req;
+	struct vdisk_resp_disk_renew *resp = &con->renew_resp;
+	int r;
+
+	down_write(&con->rw_sem);
+	if (!con->sock) {
+		r = -EAGAIN;
+		goto unlock;
+	}
+
+	snprintf(req->session_id, ARRAY_SIZE(req->session_id), "%s",
+		 con->session_id);
+	snprintf(req->disk_handle, ARRAY_SIZE(req->disk_handle), "%s",
+		 disk->disk_handle);
+	req->disk_id = cpu_to_le64(disk->disk_id);
+
+	r = __vdisk_send_req(con, VDISK_REQ_TYPE_DISK_RENEW,
+			     sizeof(*req_header) + sizeof(*req), req_header);
+	if (r)
+		goto unlock;
+
+	r = __vdisk_recv_resp(con, VDISK_REQ_TYPE_DISK_RENEW,
+			      sizeof(*resp), resp);
+	if (r)
+		goto unlock;
+unlock:
+	up_write(&con->rw_sem);
+
+	return r;
+}
