@@ -125,13 +125,13 @@ static int vdisk_release(struct vdisk *disk)
 
 	del_gendisk(disk->gdisk);
 
-	hrtimer_cancel(&disk->renew_timer);
-	destroy_workqueue(disk->wq);
-
 	for (i = 0; i < ARRAY_SIZE(disk->queue); i++)
 		vdisk_queue_deinit(disk, i);
 
 	vdisk_cache_deinit(disk);
+
+	hrtimer_cancel(&disk->renew_timer);
+	destroy_workqueue(disk->wq);
 
 	r = vdisk_con_close_disk(&disk->session->con, disk->disk_id,
 				 disk->disk_handle);
