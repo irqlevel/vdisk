@@ -16,6 +16,11 @@ size=256m
 filename=/dev/vdisk0
 rw=read
 
+[dev-write]
+size=256m
+filename=/dev/vdisk0
+rw=write
+
 [dev-rand-read]
 size=256m
 filename=/dev/vdisk0

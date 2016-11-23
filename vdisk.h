@@ -49,7 +49,7 @@
  * Should be smaller than 16KB to not exceed TLS record max size.
  */
 
-#define VDISK_BLOCK_SIZE		(4096)
+#define VDISK_BLOCK_SIZE		(2 * 4096)
 
 #define VDISK_CACHE_SIZE		(1 * VDISK_BLOCK_SIZE)
 
