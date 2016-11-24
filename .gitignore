@@ -8,4 +8,5 @@ temp/
 *.order
 *.patch
 *.swp
+*.out
 tags

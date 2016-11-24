@@ -226,6 +226,8 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 	size_t i, n, list_count;
 	int r;
 
+	mutex_lock(&disk->cache_evict_mutex);
+
 	INIT_LIST_HEAD(&list);
 	index = 0;
 	list_count = 0;
@@ -260,19 +262,11 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 			vdisk_cache_put(curr, false);
 		}
 
-		return r;
+		goto unlock;
 	}
 
 	i = 0;
 	list_for_each_entry_safe(curr, tmp, &list, list) {
-		down_write(&curr->rw_sem);
-		if (curr->dirty) {
-			r = __vdisk_cache_write(curr, &disk->session->con, 0);
-			if (r)
-				TRACE_ERR(r, "can't write cache %llu r %d",
-					  curr->index, r);
-		}
-		up_write(&curr->rw_sem);
 		arr[i++] = curr;
 	}
 
@@ -281,6 +275,21 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 
 	for (i = 0; i < list_count; i++) {
 		curr = arr[i];
+
+		if (!vdisk_cache_overflow(disk))
+			break;
+
+		down_write(&curr->rw_sem);
+		if (curr->dirty) {
+			TRACE("cache evict wb %llu age 0x%llx",
+			      curr->index, curr->age);
+
+			r = __vdisk_cache_write(curr, &disk->session->con, 0);
+			if (r)
+				TRACE_ERR(r, "can't write cache %llu r %d",
+					  curr->index, r);
+		}
+		up_write(&curr->rw_sem);
 
 		write_lock_irqsave(&disk->cache_lock, irq_flags);
 		if (__vdisk_cache_overflow(disk) &&
@@ -292,34 +301,40 @@ static int __vdisk_cache_evict(struct vdisk *disk)
 				vdisk_cache_put(curr, false);
 		}
 		write_unlock_irqrestore(&disk->cache_lock, irq_flags);
+	}
 
+	for (i = 0; i < list_count; i++) {
+		curr = arr[i];
 		list_del_init(&curr->list);
 		vdisk_cache_put(curr, false);
 	}
+
+	r = 0;
 
 	WARN_ON(!list_empty(&list));
 
 	vdisk_kfree(arr);
 
-	return 0;
+unlock:
+	mutex_unlock(&disk->cache_evict_mutex);
+
+	return r;
 }
 
 static void vdisk_cache_evict(struct vdisk *disk)
 {
 	int r;
 
-	TRACE("disk 0x%p cache evicting", disk);
+	TRACE("disk 0x%p cache evicting, usage %llu limit %llu",
+	      disk, disk->cache_entries * VDISK_CACHE_SIZE, disk->cache_limit);
 
 	r = 0;
-	while (vdisk_cache_overflow(disk)) {
+	if (vdisk_cache_overflow(disk))
 		r = __vdisk_cache_evict(disk);
-		if (!r)
-			break;
-	}
 
-	atomic_set(&disk->cache_evicting, 0);
-
-	TRACE("disk 0x%p cache evicted, r %d", disk, r);
+	TRACE("disk 0x%p cache evicted r %d, usage %llu limit %llu",
+	      disk, r, disk->cache_entries * VDISK_CACHE_SIZE,
+	      disk->cache_limit);
 }
 
 static void vdisk_cache_age(struct vdisk *disk)
@@ -516,8 +531,7 @@ unlock:
 
 static void vdisk_cache_trim(struct vdisk *disk, bool async)
 {
-	if (vdisk_cache_overflow(disk) &&
-	    atomic_cmpxchg(&disk->cache_evicting, 0, 1) == 0) {
+	if (vdisk_cache_overflow(disk)) {
 		if (async)
 			queue_work(disk->cache_wq, &disk->cache_evict_work);
 		else
@@ -652,13 +666,12 @@ int vdisk_cache_init(struct vdisk *disk)
 	INIT_WORK(&disk->cache_evict_work, vdisk_cache_evict_worker);
 
 	rwlock_init(&disk->cache_lock);
+	mutex_init(&disk->cache_evict_mutex);
 
 	disk->cache_limit = 1024 * 1024;
 
 	hrtimer_init(&disk->cache_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	disk->cache_timer.function = vdisk_cache_timer_callback;
-
-	atomic_set(&disk->cache_evicting, 0);
 
 	disk->cache_wq = alloc_workqueue("vdisk-cache-wq",
 					 WQ_MEM_RECLAIM, 0);

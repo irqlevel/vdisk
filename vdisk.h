@@ -49,7 +49,7 @@
  * Should be smaller than 16KB to not exceed TLS record max size.
  */
 
-#define VDISK_BLOCK_SIZE		(2 * 4096)
+#define VDISK_BLOCK_SIZE		(1 * 4096)
 
 #define VDISK_CACHE_SIZE		(1 * VDISK_BLOCK_SIZE)
 
@@ -299,7 +299,7 @@ struct vdisk {
 	u64 cache_limit;
 	struct work_struct cache_evict_work;
 	struct workqueue_struct *cache_wq;
-	atomic_t cache_evicting;
+	struct mutex cache_evict_mutex;
 	struct hrtimer cache_timer;
 
 	struct workqueue_struct *wq;
