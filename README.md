@@ -17,31 +17,42 @@ https://vdiskhub.com/ - web console
 
 #### Usage:
 ```sh
+#load kernel module
+$ insmod vdisk.ko
+#create user session
+$ echo mysession > /sys/fs/vdisk/create_session
 
-$ insmod vdisk.ko #load kernel module
+#connect to server
+$ echo 52.8.178.233 9111 myaccount@gmail.com mypassword > /sys/fs/vdisk/mysession/connect
 
-$ echo mysession > /sys/fs/vdisk/create_session #create user session 
+#generate AES-256 key in hex form
+$ echo mydiskpassword | sha256sum | awk '{ print $1 }'
 
-$ echo 52.8.178.233 9111 myaccount@gmail.com mypassword > /sys/fs/vdisk/mysession/connect #connect server
+#open existing 'mydisk' disk
+$ echo mydisk mykey > /sys/fs/vdisk/mysession/open_disk
 
-$ echo mydiskpassword | sha256sum | awk '{ print $1 }' #generate AES-256 key in hex form
+#or create new 'mydisk' with size 256MB
+$ echo mydisk 256 mykey > /sys/fs/vdisk/mysession/create_disk
 
-$ echo mydisk mykey > /sys/fs/vdisk/mysession/open_disk #open disk existing 'mydisk' disk
+#get block device number
+$ cat /sys/fs/vdisk/mysession/mydisk/number
 
-$ echo mydisk 268435456 mykey > /sys/fs/vdisk/mysession/create_disk #or create new 'mydisk' disk, where 268435456 - size in bytes
+#format disk as EXT4 file system
+$ mkfs.ext4 /dev/vdisk{number}
 
-$ cat /sys/fs/vdisk/mysession/mydisk/number #get device number
+#mount disk
+$ mkdir /mnt/mydisk && mount /dev/vdisk{number} /mnt/mydisk
 
-$ mkfs.ext4 /dev/vdisk{number}	#format disk as EXT4 file system
+#work with data
+$ cd /mnt/mydisk && ...
 
-$ mkdir /mnt/mydisk && mount /dev/vdisk{number} /mnt/mydisk #mount disk file system
-
-$ cd /mnt/mydisk && ... #work with disk data
-
+#unmount disk
 $ umount /dev/vdisk{number} #unmount disk
 
-$ echo mysession > /sys/fs/vdisk/delete_session #close disk and delete session
+#close disk and delete session
+$ echo mysession > /sys/fs/vdisk/delete_session
 
-$ rmmod vdisk #unload kernel module
+#unload kernel module
+$ rmmod vdisk
 
 ```

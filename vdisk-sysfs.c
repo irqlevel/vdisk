@@ -242,6 +242,11 @@ static ssize_t vdisk_session_attr_create_disk_store(struct vdisk_session *sess,
 	if (r < 3)
 		return -EINVAL;
 
+	if (size >= ((~0ULL) / ( 1024ULL * 1024ULL)))
+		return -EINVAL;
+
+	size *= (1024ULL * 1024ULL);
+
 	name[VDISK_ID_SIZE - 1] = '\0';
 	key_buf[VDISK_ID_SIZE - 1] = '\0';
 
