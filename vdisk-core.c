@@ -465,6 +465,19 @@ static enum hrtimer_restart vdisk_renew_timer_callback(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
+static struct vdisk *vdisk_session_lookup_disk(struct vdisk_session *session,
+					       char *name)
+{
+	struct vdisk *curr;
+
+	list_for_each_entry(curr, &session->disk_list, list) {
+		if (strncmp(curr->name, name, strlen(curr->name) + 1) == 0)
+			return curr;
+	}
+
+	return NULL;
+}
+
 static int vdisk_session_start_disk(struct vdisk_session *session,
 				    char *name, u64 size, u64 disk_id,
 				    char *disk_handle, unsigned char key[32])
@@ -566,12 +579,20 @@ static int vdisk_session_start_disk(struct vdisk_session *session,
 	set_capacity(gdisk, size / 512);
 	disk->gdisk = gdisk;
 
-	r = vdisk_sysfs_init(&disk->kobj_holder, &session->kobj_holder.kobj,
-			&vdisk_disk_ktype, "vdisk%d", disk->number);
-	if (r)
-		goto free_gdisk;
-
 	down_write(&session->rw_sem);
+	if (vdisk_session_lookup_disk(session, disk->name)) {
+		r = -EEXIST;
+		up_write(&session->rw_sem);
+		goto free_gdisk;
+	}
+
+	r = vdisk_sysfs_init(&disk->kobj_holder, &session->kobj_holder.kobj,
+			&vdisk_disk_ktype, "%s", disk->name);
+	if (r) {
+		up_write(&session->rw_sem);
+		goto free_gdisk;
+	}
+
 	TRACE("session 0x%p disk 0x%p gdisk 0x%p number %d added",
 	      session, disk, gdisk, disk->number);
 	list_add_tail(&disk->list, &session->disk_list);
@@ -749,19 +770,38 @@ int vdisk_session_logout(struct vdisk_session *session)
 	return r;
 }
 
-int vdisk_global_create_session(struct vdisk_global *glob, int number)
+static struct vdisk_session *vdisk_lookup_session(struct vdisk_global *glob,
+						  char *name)
+{
+	struct vdisk_session *curr;
+
+	list_for_each_entry(curr, &glob->session_list, list) {
+		if (strncmp(curr->name, name, strlen(curr->name) + 1) == 0)
+			return curr;
+	}
+
+	return NULL;
+}
+
+int vdisk_global_create_session(struct vdisk_global *glob, char *name)
 {
 	struct vdisk_session *session;
+	int i, number;
 	int r;
 
 	if (WARN_ON(glob != vdisk_get_global()))
 		return -EINVAL;
-	if (number < 0 || number >= VDISK_SESSION_NUMBER_MAX)
-		return -EINVAL;
 
-	TRACE("creating session %d", number);
+	TRACE("creating session %s", name);
 
-	if (test_and_set_bit(number, glob->session_numbers) != 0)
+	number = -1;
+	for (i = 0; i < VDISK_SESSION_NUMBER_MAX; i++) {
+		if (test_and_set_bit(i, glob->session_numbers) == 0) {
+			number = i;
+			break;
+		}
+	}
+	if (number < 0)
 		return -EINVAL;
 
 	session = vdisk_kzalloc(sizeof(*session), GFP_KERNEL);
@@ -772,18 +812,28 @@ int vdisk_global_create_session(struct vdisk_global *glob, int number)
 	init_rwsem(&session->rw_sem);
 	INIT_LIST_HEAD(&session->disk_list);
 	session->number = number;
+	snprintf(session->name, ARRAY_SIZE(session->name), "%s", name);
 
 	r = vdisk_con_init(&session->con);
 	if (r)
 		goto free_session;
 
-	r = vdisk_sysfs_init(&session->kobj_holder, &glob->kobj_holder.kobj,
-		&vdisk_session_ktype, "session%d", session->number);
-	if (r)
-		goto free_con;
-
 	down_write(&glob->rw_sem);
-	TRACE("session 0x%p number %d added", session, session->number);
+	if (vdisk_lookup_session(glob, name)) {
+		r = -EEXIST;
+		up_write(&glob->rw_sem);
+		goto free_con;
+	}
+
+	r = vdisk_sysfs_init(&session->kobj_holder, &glob->kobj_holder.kobj,
+		&vdisk_session_ktype, "%s", session->name);
+	if (r) {
+		up_write(&glob->rw_sem);
+		goto free_con;
+	}
+
+	TRACE("session 0x%p name %s number %d added",
+	      session, session->name, session->number);
 	list_add_tail(&session->list, &glob->session_list);
 	up_write(&glob->rw_sem);
 
@@ -798,7 +848,7 @@ free_number:
 	return r;
 }
 
-int vdisk_global_delete_session(struct vdisk_global *glob, int number)
+int vdisk_global_delete_session(struct vdisk_global *glob, char *name)
 {
 	struct vdisk_session *curr, *tmp;
 	int r;
@@ -806,12 +856,12 @@ int vdisk_global_delete_session(struct vdisk_global *glob, int number)
 	if (WARN_ON(glob != vdisk_get_global()))
 		return -EINVAL;
 
-	TRACE("deleting session %d", number);
+	TRACE("deleting session %s", name);
 
 	r = -ENOTTY;
 	down_write(&glob->rw_sem);
 	list_for_each_entry_safe(curr, tmp, &glob->session_list, list) {
-		if (curr->number == number) {
+		if (strncmp(curr->name, name, strlen(curr->name) + 1) == 0) {
 			list_del_init(&curr->list);
 			vdisk_session_release(curr);
 			r = 0;

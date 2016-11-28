@@ -253,12 +253,13 @@ struct vdisk_connection {
 };
 
 struct vdisk_session {
-	int number;
 	struct list_head list;
 	struct list_head disk_list;
 	struct rw_semaphore rw_sem;
 	struct vdisk_connection con;
 	struct vdisk_kobject_holder kobj_holder;
+	char name[VDISK_ID_SIZE];
+	int number;
 };
 
 struct vdisk;
@@ -356,9 +357,9 @@ int vdisk_session_login(struct vdisk_session *session,
 
 int vdisk_session_logout(struct vdisk_session *session);
 
-int vdisk_global_create_session(struct vdisk_global *glob, int number);
+int vdisk_global_create_session(struct vdisk_global *glob, char *name);
 
-int vdisk_global_delete_session(struct vdisk_global *glob, int number);
+int vdisk_global_delete_session(struct vdisk_global *glob, char *name);
 
 int vdisk_encrypt(struct vdisk *disk, void *input,
 		  u32 len, void *output, void *iv, u32 iv_len);

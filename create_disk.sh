@@ -2,27 +2,27 @@
 set -e
 
 WDIR=temp
+SESSION=$1
+DISK=$2
 
-echo 1 > /sys/fs/vdisk/create_session
-#echo 185.87.193.120 9111 > /sys/fs/vdisk/session1/connect
-echo $1 9111 > /sys/fs/vdisk/session1/connect
-echo a@b.com 1q2w3e > /sys/fs/vdisk/session1/login
-
-cat /sys/fs/vdisk/session1/session_id
+cat /sys/fs/vdisk/$SESSION/session_id
 KEY=`echo 1q2w3e | sha256sum | awk '{ print $1 }'`
-echo $2 $((256 * 1024 * 1024)) $KEY > /sys/fs/vdisk/session1/create_disk
-cat /sys/fs/vdisk/session1/vdisk0/disk_id
-cat /sys/fs/vdisk/session1/vdisk0/size
-cat /sys/fs/vdisk/session1/vdisk0/disk_handle
+echo $DISK $((256 * 1024 * 1024)) $KEY > /sys/fs/vdisk/$SESSION/create_disk
+DISK_NUM=`cat /sys/fs/vdisk/$SESSION/$DISK/number`
+cat /sys/fs/vdisk/$SESSION/$DISK/disk_id
+cat /sys/fs/vdisk/$SESSION/$DISK/size
+cat /sys/fs/vdisk/$SESSION/$DISK/disk_handle
 
-dd if=/dev/urandom of=$WDIR/file bs=1M count=16
-dd if=$WDIR/file of=/dev/vdisk0 bs=1M count=16
-dd if=/dev/vdisk0 of=$WDIR/file2 bs=1M count=16
+DEV=/dev/vdisk$DISK_NUM
+MNT=/mnt/vdisk$DISK_NUM
+dd if=/dev/urandom of=$WDIR/file-$DISK_NUM bs=1M count=16
+dd if=$WDIR/file-$DISK_NUM of=$DEV bs=1M count=16
+dd if=$DEV of=$WDIR/file2-$DISK_NUM bs=1M count=16
 
-md5sum $WDIR/file $WDIR/file2
+md5sum $WDIR/file-$DISK_NUM $WDIR/file2-$DISK_NUM
 
-umount /mnt/vdisk0 || true
-rm -rf /mnt/vdisk0
-mkdir /mnt/vdisk0
-mkfs.ext4 /dev/vdisk0
-mount -t ext4 /dev/vdisk0 /mnt/vdisk0
+umount $MNT || true
+rm -rf $MNT
+mkdir $MNT
+mkfs.ext4 $DEV
+mount -t ext4 $DEV $MNT

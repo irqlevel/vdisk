@@ -2,6 +2,9 @@
 WDIR=temp
 
 set -e
-umount /dev/vdisk0 || true
-cat /sys/fs/vdisk/session1/vdisk0/disk_id
-echo $1 > /sys/fs/vdisk/session1/close_disk
+SESSION=$1
+DISK=$2
+DISK_NUM=`cat /sys/fs/vdisk/$SESSION/$DISK/number`
+umount /dev/vdisk$DISK_NUM || true
+cat /sys/fs/vdisk/$SESSION/$DISK/disk_id
+echo $DISK > /sys/fs/vdisk/$SESSION/close_disk

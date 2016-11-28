@@ -1,10 +1,10 @@
 CURRDIR = $(shell pwd)
 KERNEL_BUILD_PATH=/lib/modules/$(shell uname -r)/build
 
-VDISK_MOD = vdisk-mod
+VDISK_MOD = vdisk
 VDISK_MOD_KO = $(VDISK_MOD).ko
 
-vdisk-mod-y  += vdisk.o vdisk-sysfs.o vdisk-connection.o ksocket.o	\
+vdisk-y +=	vdisk-core.o vdisk-sysfs.o vdisk-connection.o ksocket.o	\
 		vdisk-trace.o vdisk-cache.o vdisk-malloc-checker.o	\
 		vdisk-helpers.o						\
 		mbedtls-helpers.o					\

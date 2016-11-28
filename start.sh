@@ -7,7 +7,7 @@ make
 sync
 sync
 modprobe dns-resolver
-insmod vdisk-mod.ko
+insmod vdisk.ko
 
 rm -rf $WDIR
 mkdir -p $WDIR
