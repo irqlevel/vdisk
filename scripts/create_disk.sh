@@ -4,10 +4,11 @@ set -e
 WDIR=temp
 SESSION=$1
 DISK=$2
+SPACE=$3
 
 cat /sys/fs/vdisk/$SESSION/session_id
 KEY=`echo 1q2w3e | sha256sum | awk '{ print $1 }'`
-echo $DISK $((256 * 1024 * 1024)) $KEY > /sys/fs/vdisk/$SESSION/create_disk
+echo $DISK $SPACE $KEY > /sys/fs/vdisk/$SESSION/create_disk
 DISK_NUM=`cat /sys/fs/vdisk/$SESSION/$DISK/number`
 cat /sys/fs/vdisk/$SESSION/$DISK/disk_id
 cat /sys/fs/vdisk/$SESSION/$DISK/size
