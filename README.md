@@ -11,6 +11,10 @@ $ cd vdisk
 $ make
 ```
 
+#### Server:
+https://vdiskhub.com/ - web console
+52.8.178.233:9111 - storage server
+
 #### Usage:
 ```sh
 
@@ -18,7 +22,7 @@ $ insmod vdisk.ko #load kernel module
 
 $ echo mysession > /sys/fs/vdisk/create_session #create user session 
 
-$ echo 52.8.178.233 9111 myaccount@gmail.com mypassword > /sys/fs/vdisk/mysession/connect
+$ echo 52.8.178.233 9111 myaccount@gmail.com mypassword > /sys/fs/vdisk/mysession/connect #connect server
 
 $ echo mydiskpassword | sha256sum | awk '{ print $1 }' #generate AES-256 key in hex form
 
