@@ -13,12 +13,14 @@ $ make
 
 #### Server:
 https://vdiskhub.com/ - web console
+
 52.8.178.233:9111 - storage server
 
 #### Usage:
 ```sh
 #load kernel module
 $ insmod vdisk.ko
+
 #create user session
 $ echo mysession > /sys/fs/vdisk/create_session
 
