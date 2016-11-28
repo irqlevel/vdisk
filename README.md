@@ -24,7 +24,7 @@ $ echo mydiskpassword | sha256sum | awk '{ print $1 }' #generate AES-256 key in 
 
 $ echo mydisk mykey > /sys/fs/vdisk/mysession/open_disk #open disk existing 'mydisk' disk
 
-$ echo mydisk 268435456 mykey > /sys/fs/vdisk/mysession/create_disk #or create new 'mydisk' disk
+$ echo mydisk 268435456 mykey > /sys/fs/vdisk/mysession/create_disk #or create new 'mydisk' disk, where 268435456 - size in bytes
 
 $ cat /sys/fs/vdisk/mysession/mydisk/number #get device number
 
