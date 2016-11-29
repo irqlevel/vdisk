@@ -199,9 +199,9 @@ static ssize_t vdisk_disk_attr_cache_limit_store(struct vdisk *disk,
 	u64 limit;
 	int r;
 
-	r = sscanf(buf, "%llu", &limit);
-	if (r < 1)
-		return -EINVAL;
+	r = kstrtoull(buf, 10, &limit);
+	if (r)
+		return r;
 
 	vdisk_cache_set_limit(disk, limit);
 
@@ -242,10 +242,10 @@ static ssize_t vdisk_session_attr_create_disk_store(struct vdisk_session *sess,
 	if (r < 3)
 		return -EINVAL;
 
-	if (size >= ((~0ULL) / ( 1024ULL * 1024ULL)))
+	if (size >= (U64_MAX / MEGA_BYTE))
 		return -EINVAL;
 
-	size *= (1024ULL * 1024ULL);
+	size *= MEGA_BYTE;
 
 	name[VDISK_ID_SIZE - 1] = '\0';
 	key_buf[VDISK_ID_SIZE - 1] = '\0';

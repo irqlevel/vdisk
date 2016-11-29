@@ -29,14 +29,14 @@ const char *vdisk_truncate_file_name(const char *file_name)
 
 int vdisk_hex_to_byte(unsigned char c)
 {
-        if (c >= '0' && c <= '9')
-                return c - '0';
-        if (c >= 'a' && c <= 'f')
-                return c - 'a' + 10;
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
 	if (c >= 'A' && c <= 'F')
 		return c - 'A' + 10;
-        else
-                return -1;
+	else
+		return -1;
 }
 
 int vdisk_hex_to_bytes(char *hex, int hex_len, unsigned char *dst,
@@ -54,7 +54,7 @@ int vdisk_hex_to_bytes(char *hex, int hex_len, unsigned char *dst,
 	if (dst_len != hex_len/2)
 		return -EINVAL;
 
-        for (i = 0, pos = 0; i < hex_len; i += 2, pos += 1) {
+	for (i = 0, pos = 0; i < hex_len; i += 2, pos += 1) {
 		high = vdisk_hex_to_byte(hex[i]);
 		low = vdisk_hex_to_byte(hex[i + 1]);
 		if (high == -1 || low == -1)
@@ -62,5 +62,5 @@ int vdisk_hex_to_bytes(char *hex, int hex_len, unsigned char *dst,
 		dst[pos] = (high << 4) + low;
 	}
 
-        return 0;
+	return 0;
 }

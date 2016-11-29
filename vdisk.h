@@ -59,6 +59,8 @@
 
 #define VDISK_TIMEOUT_MS		(60 * 1000)
 
+#define MEGA_BYTE			(1024ULL * 1024ULL)
+
 struct vdisk_kobject_holder {
 	struct kobject kobj;
 	struct completion completion;
