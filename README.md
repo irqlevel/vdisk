@@ -20,7 +20,7 @@ store.vdiskhub.com:9111 (52.8.178.233:9111) - storage server
 ```sh
 
 #enable DNS lookup in kernel
-apt-get install keyutils
+$ apt-get install keyutils
 
 #load kernel module
 $ insmod vdisk.ko
