@@ -28,7 +28,7 @@ $ insmod vdisk.ko
 #create user session
 $ echo mysession > /sys/fs/vdisk/create_session
 
-#connect to server
+#connect to server store.vdiskhub.com:9111 or 52.8.178.233:9111
 $ echo store.vdiskhub.com 9111 myaccount@mymail.com mypassword > /sys/fs/vdisk/mysession/connect
 
 #generate AES-256 key in hex form
