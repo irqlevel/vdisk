@@ -14,10 +14,14 @@ $ make
 #### Server:
 https://vdiskhub.com/ - web console
 
-52.8.178.233:9111 - storage server
+store.vdiskhub.com:9111 (52.8.178.233:9111) - storage server
 
 #### Usage:
 ```sh
+
+#enable DNS lookup in kernel
+apt-get install keyutils
+
 #load kernel module
 $ insmod vdisk.ko
 
@@ -25,7 +29,7 @@ $ insmod vdisk.ko
 $ echo mysession > /sys/fs/vdisk/create_session
 
 #connect to server
-$ echo 52.8.178.233 9111 myaccount@gmail.com mypassword > /sys/fs/vdisk/mysession/connect
+$ echo store.vdiskhub.com 9111 myaccount@mymail.com mypassword > /sys/fs/vdisk/mysession/connect
 
 #generate AES-256 key in hex form
 $ echo mydiskpassword | sha256sum | awk '{ print $1 }'
