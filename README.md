@@ -14,7 +14,7 @@ $ make
 #### Server:
 https://vdiskhub.com/ - web console
 
-store.vdiskhub.com:9111 (52.8.178.233:9111) - storage server
+store.vdiskhub.com:9111 (52.52.175.249:9111) - storage server
 
 #### Usage:
 ```sh
