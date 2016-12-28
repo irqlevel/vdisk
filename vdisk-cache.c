@@ -114,6 +114,7 @@ static struct vdisk_cache *vdisk_cache_insert(struct vdisk *disk,
 	}
 	write_unlock_irqrestore(&disk->cache_lock, irq_flags);
 
+	radix_tree_preload_end();
 	return curr;
 }
 
