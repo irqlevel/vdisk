@@ -663,7 +663,7 @@ static enum hrtimer_restart vdisk_cache_timer_callback(struct hrtimer *timer)
 
 int vdisk_cache_init(struct vdisk *disk)
 {
-	INIT_RADIX_TREE(&disk->cache_root, GFP_NOIO);
+	INIT_RADIX_TREE(&disk->cache_root, GFP_ATOMIC);
 	INIT_WORK(&disk->cache_evict_work, vdisk_cache_evict_worker);
 
 	rwlock_init(&disk->cache_lock);
